@@ -4,8 +4,13 @@
  */
 
 import assert from 'assert/strict';
+import {createServer} from 'http';
+
+import puppeteer from 'puppeteer-core';
+import {getChromePath} from 'chrome-launcher';
 
 import ConsoleMessagesGatherer from '../../../gather/gatherers/console-messages.js';
+import {Driver} from '../../../gather/driver.js';
 
 class MockSession {
   constructor() {
@@ -32,6 +37,65 @@ class MockDriver {
 }
 
 describe('ConsoleMessages', () => {
+  it('captures discouraged API violations across RenderDocument navigations', async () => {
+    const html = `<!doctype html><title>Violation reporting</title><script>
+      document.write('<h1>Violation reporting</h1>');
+      navigator.geolocation.getCurrentPosition(() => {}, () => {});
+      Notification.requestPermission();
+    </script>`;
+    const server = createServer((request, response) => {
+      response.writeHead(200, {'Content-Type': 'text/html'});
+      response.end(html);
+    });
+    /** @type {import('puppeteer-core').Browser|undefined} */
+    let browser;
+    /** @type {Driver|undefined} */
+    let driver;
+    try {
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected a TCP address');
+      browser = await puppeteer.launch({
+        executablePath: getChromePath(),
+        args: ['--enable-features=RenderDocument'],
+      });
+      const page = await browser.newPage();
+      driver = new Driver(page);
+      await driver.connect();
+      const gatherer = new ConsoleMessagesGatherer();
+      // Subscribe before navigation, just as navigation gathering does on about:blank.
+      await gatherer.startInstrumentation({driver});
+      for (let i = 0; i < 2; i++) {
+        const url = `http://127.0.0.1:${address.port}/?navigation=${i}`;
+        await page.goto(url);
+        const messages = await gatherer.getArtifact();
+        for (const text of ['document.write', 'geolocation', 'notification permission']) {
+          assert.ok(messages.some(message => message.source === 'violation' &&
+            message.url === url && message.text.includes(text)), `${text} on ${url}`);
+        }
+      }
+      await gatherer.stopInstrumentation({driver});
+    } finally {
+      try {
+        await driver?.disconnect();
+      } finally {
+        try {
+          await browser?.close();
+        } finally {
+          server.closeAllConnections();
+          if (server.listening) {
+            await new Promise((resolve, reject) => {
+              server.close(error => error ? reject(error) : resolve());
+            });
+          }
+        }
+      }
+    }
+  }).timeout(15000);
+
   it('captures the exceptions raised', async () => {
     const consoleGatherer = new ConsoleMessagesGatherer();
     const runtimeEx =
