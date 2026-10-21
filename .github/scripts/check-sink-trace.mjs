@@ -22,4 +22,19 @@ for (const event of events) {
   const reasons = sinks.get(key);
   reasons[args.reason] = (reasons[args.reason] || 0) + 1;
 }
-console.log(JSON.stringify({events: events.length, sinks: Object.fromEntries(sinks)}, null, 2));
+const states = (trace.traceEvents || trace).filter(e => e.name === 'BeginFrameUndrawnState');
+if (process.argv.includes('--require-state')) {
+  assert(states.length > 0, 'Missing actual counter state');
+}
+for (const {args} of states) {
+  for (const key of ['frame_sink_client_id', 'frame_sink_sink_id', 'active_frame_index',
+    'last_drawn_frame_index', 'undrawn_frame_count']) {
+    assert(Number.isSafeInteger(args[key]) && args[key] >= 0, `Invalid ${key}`);
+  }
+  assert.equal(args.undrawn_frame_count, args.active_frame_index - args.last_drawn_frame_index);
+  assert.equal(typeof args.may_throttle_if_undrawn_frames, 'boolean');
+  assert.equal(typeof args.should_throttle_undrawn_frames, 'boolean');
+  assert(Number.isFinite(args.time_since_last_frame_ms));
+}
+console.log(JSON.stringify({events: events.length, stateEvents: states.length,
+  sinks: Object.fromEntries(sinks)}, null, 2));

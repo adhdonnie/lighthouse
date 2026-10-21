@@ -1,0 +1,23 @@
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -1513,11 +1513,17 @@
+     }
+   }
+ 
+-  // If a new viz::LocalSurfaceId has been provided, and the viewport has
+-  // changed, we need not begin new frames until it has activated.
++  // A parent can replace the surface without changing the viewport size.
++  // Avoid obsolete impl frames while that parent update is being committed.
++  // Child-only acknowledgments do not request a commit, so keep them excluded
++  // unless the viewport changed.
+   if (local_surface_id_from_parent.is_valid() &&
+       previous_local_surface_id != local_surface_id_from_parent &&
+-      device_viewport_rect_changed) {
++      (device_viewport_rect_changed ||
++       !AreEmbedTokensEqual(previous_local_surface_id,
++                            local_surface_id_from_parent) ||
++       !AreParentSequencesEqual(previous_local_surface_id,
++                                local_surface_id_from_parent))) {
+     SetTargetLocalSurfaceId(local_surface_id_from_parent);
+   }
+ 

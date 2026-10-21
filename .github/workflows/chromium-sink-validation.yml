@@ -4,8 +4,10 @@ on:
     branches: [codex/chromium-sink-validation]
     paths:
       - '.github/workflows/chromium-sink-validation.yml'
-      - '.github/patches/chromium-sink-tracing.patch'
-      - '.github/scripts/chromium-sink-capture.mjs'
+      - '.github/patches/chromium*.patch'
+      - '.github/scripts/chromium-*'
+      - '.github/scripts/scrollbar-factor.mjs'
+      - '.github/scripts/check-sink-trace.mjs'
   workflow_dispatch:
 permissions:
   contents: read
@@ -14,19 +16,22 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
       DEPOT_TOOLS_UPDATE: '0'
       CHROMIUM_VERSION: '155.0.8059.85'
+      CHROMIUM_REVISION: '0e66b94549a8bd85f03fbdf189b752d6e7b63c32'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Prepare disposable hosted build space
+        timeout-minutes: 10
         shell: bash
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted
+          echo "CHROMIUM_DEADLINE=$(( $(date +%s) + 330 * 60 ))" >> "$GITHUB_ENV"
           mkdir -p .tmp/chromium-evidence
           df -h / | tee .tmp/chromium-evidence/disk-before.txt
           # This job has its own disposable VM. Remove only unused preinstalled SDKs.
@@ -40,24 +45,32 @@ jobs:
           df -h / | tee .tmp/chromium-evidence/disk-ready.txt
           free -h | tee .tmp/chromium-evidence/memory-ready.txt
           test "$(df --output=avail -BG / | tail -1 | tr -dc '0-9')" -ge 100
-      - name: Sync pinned Chromium source and toolchain
+      - name: Sync pinned Chromium source and bootstrap toolchain
+        timeout-minutes: 75
         shell: bash
         run: |
           set -o pipefail
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
           git -C "$RUNNER_TEMP/depot_tools" checkout f2ac30836f43e58e4f79a8d969a88057e7704ab2
           export PATH="$RUNNER_TEMP/depot_tools:$PATH"
+          export DEPOT_TOOLS_DIR="$RUNNER_TEMP/depot_tools"
+          echo "DEPOT_TOOLS_DIR=$DEPOT_TOOLS_DIR" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/depot_tools" >> "$GITHUB_PATH"
+          # Pinning skips automatic updates, so explicitly initialize Python/CIPD.
+          "$RUNNER_TEMP/depot_tools/ensure_bootstrap" 2>&1 | tee .tmp/chromium-evidence/bootstrap.log
+          "$RUNNER_TEMP/depot_tools/python-bin/python3" --version
           mkdir -p "$RUNNER_TEMP/chromium"
           cd "$RUNNER_TEMP/chromium"
           gclient config --spec 'solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "deps_file": "DEPS", "managed": False, "custom_deps": {}, "custom_vars": {}}]'
-          gclient sync --nohooks --no-history --revision "src@refs/tags/$CHROMIUM_VERSION" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/sync.log"
+          gclient sync --verbose --nohooks --no-history --revision "src@$CHROMIUM_REVISION" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/sync.log"
           cd src
+          test "$(git rev-parse HEAD)" = "$CHROMIUM_REVISION"
           git rev-parse HEAD | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chromium-revision.txt"
           cat chrome/VERSION | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chromium-version.txt"
           sudo ./build/install-build-deps.sh --no-prompt --no-arm 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/dependencies.log"
           gclient runhooks 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/hooks.log"
-      - name: Apply diagnostic patch and check checkout formatter
+      - name: Apply IDs-only patch and check checkout formatter
+        timeout-minutes: 10
         shell: bash
         run: |
           set -o pipefail
@@ -66,39 +79,108 @@ jobs:
           git apply "$GITHUB_WORKSPACE/.github/patches/chromium-sink-tracing.patch"
           git cl format --upstream=HEAD --dry-run -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/format.log"
           git diff --check
-          git diff > "$GITHUB_WORKSPACE/.tmp/chromium-evidence/applied.patch"
-          gn gen out/Diagnostic --args='is_debug=false is_component_build=true symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_remoteexec=false use_siso=true'
+          git diff > "$GITHUB_WORKSPACE/.tmp/chromium-evidence/ids-only.patch"
+          buildtools/linux64/gn gen out/Diagnostic --args='is_debug=false is_component_build=true symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_remoteexec=false use_siso=true'
       - name: Build and run compositor regression tests
+        timeout-minutes: 105
         shell: bash
         run: |
           set -o pipefail
           cd "$RUNNER_TEMP/chromium/src"
-          autoninja -C out/Diagnostic -j 4 viz_unittests 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-build.log"
-          out/Diagnostic/viz_unittests --gtest_filter='*CompositorFrameSinkSupportTest*:*VideoCadenceThrottlingTest*' --gtest_output="json:$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-tests.json" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-tests.log"
-      - name: Build diagnostic browser
+          bash "$GITHUB_WORKSPACE/.github/scripts/chromium-budget.sh" autoninja -C out/Diagnostic -j 4 viz_unittests 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-build.log"
+          vpython3 testing/xvfb.py out/Diagnostic/viz_unittests --gtest_filter='*CompositorFrameSinkSupportTest*:*VideoCadenceThrottlingTest*' --gtest_output="json:$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-tests.json" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-tests.log"
+          python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["tests"]>0 and r["failures"]==0' "$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-tests.json"
+      - name: Build IDs-only browser and retain runtime
+        id: ids_browser
+        timeout-minutes: 100
         shell: bash
         run: |
           set -o pipefail
           cd "$RUNNER_TEMP/chromium/src"
-          autoninja -C out/Diagnostic -j 4 chrome 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chrome-build.log"
+          bash "$GITHUB_WORKSPACE/.github/scripts/chromium-budget.sh" autoninja -C out/Diagnostic -j 4 chrome 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chrome-build.log"
           out/Diagnostic/chrome --version | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/browser-version.txt"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/chromium-runtime-copy.py" out/Diagnostic "$RUNNER_TEMP/chromium-ids-runtime"
+          cp "$RUNNER_TEMP/chromium-ids-runtime/runtime-manifest.json" "$GITHUB_WORKSPACE/.tmp/chromium-evidence/ids-runtime-manifest.json"
+          ldd "$RUNNER_TEMP/chromium-ids-runtime/chrome" > "$GITHUB_WORKSPACE/.tmp/chromium-evidence/ids-runtime-linkage.txt"
+          if rg -q 'not found' "$GITHUB_WORKSPACE/.tmp/chromium-evidence/ids-runtime-linkage.txt"; then exit 1; fi
+          "$RUNNER_TEMP/chromium-ids-runtime/chrome" --version
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.19'
-      - name: Capture sink-resolved controlled traces
-        shell: bash
+      - name: Install locked capture dependencies
+        timeout-minutes: 5
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
         run: |
-          set -o pipefail
           corepack enable
           yarn install --frozen-lockfile
           yarn build-report
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          CHROME_PATH="$RUNNER_TEMP/chromium/src/out/Diagnostic/chrome" node .github/scripts/chromium-sink-capture.mjs .tmp/chromium-evidence/captures 2>&1 | tee .tmp/chromium-evidence/capture.log
-          for trace in .tmp/chromium-evidence/captures/*.trace.json.gz; do
-            node .github/scripts/check-sink-trace.mjs "$trace" > "$trace.sinks.json"
+      - name: Record actual undrawn state and both causal controls
+        id: state_capture
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/chromium/src"
+          git apply --check "$GITHUB_WORKSPACE/.github/patches/chromium-undrawn-state-tracing.patch"
+          git apply "$GITHUB_WORKSPACE/.github/patches/chromium-undrawn-state-tracing.patch"
+          git cl format --upstream=HEAD --dry-run -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+          git diff > "$GITHUB_WORKSPACE/.tmp/chromium-evidence/counter-state.patch"
+          bash "$GITHUB_WORKSPACE/.github/scripts/chromium-budget.sh" autoninja -C out/Diagnostic -j 4 chrome 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/counter-build.log"
+          cd "$GITHUB_WORKSPACE"
+          export CHROME_PATH="$RUNNER_TEMP/chromium/src/out/Diagnostic/chrome"
+          node .github/scripts/chromium-sink-capture.mjs .tmp/chromium-evidence/renderdocument-captures 2>&1 | tee .tmp/chromium-evidence/renderdocument-capture.log
+          node .github/scripts/scrollbar-factor.mjs . .tmp/chromium-evidence/scrollbar-captures 2>&1 | tee .tmp/chromium-evidence/scrollbar-capture.log
+          for trace in .tmp/chromium-evidence/*-captures/*.trace.json.gz; do
+            node .github/scripts/check-sink-trace.mjs "$trace" --require-state > "$trace.sinks.json"
           done
+      - name: Test same-size target-surface experiment
+        id: surface_experiment
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/chromium/src"
+          git apply --check "$GITHUB_WORKSPACE/.github/patches/chromium-same-size-surface-experiment.patch"
+          git apply "$GITHUB_WORKSPACE/.github/patches/chromium-same-size-surface-experiment.patch"
+          git cl format --upstream=HEAD --dry-run -- cc/trees/layer_tree_host.cc
+          git diff > "$GITHUB_WORKSPACE/.tmp/chromium-evidence/surface-experiment.patch"
+          bash "$GITHUB_WORKSPACE/.github/scripts/chromium-budget.sh" autoninja -C out/Diagnostic -j 4 cc_unittests chrome 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/surface-build.log"
+          vpython3 testing/xvfb.py out/Diagnostic/cc_unittests --gtest_filter='*LocalSurface*:*SurfaceId*' --gtest_output="json:$GITHUB_WORKSPACE/.tmp/chromium-evidence/surface-tests.json" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/surface-tests.log"
+          python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["tests"]>0 and r["failures"]==0' "$GITHUB_WORKSPACE/.tmp/chromium-evidence/surface-tests.json"
+          cd "$GITHUB_WORKSPACE"
+          export CHROME_PATH="$RUNNER_TEMP/chromium/src/out/Diagnostic/chrome"
+          node .github/scripts/scrollbar-factor.mjs . .tmp/chromium-evidence/surface-captures 2>&1 | tee .tmp/chromium-evidence/surface-capture.log
+          MATRIX_ARMS=default node .github/scripts/renderdocument-matrix.mjs . .tmp/chromium-evidence/surface-smoke 2>&1 | tee .tmp/chromium-evidence/surface-smoke.log
+      - name: Restore original source and measure IDs-only overhead
+        if: always() && steps.ids_browser.outcome == 'success'
+        id: overhead
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -o pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          cd "$RUNNER_TEMP/chromium/src"
+          # Only task-applied patches exist in this fresh disposable checkout.
+          git restore --source=HEAD -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc cc/trees/layer_tree_host.cc
+          git diff --exit-code -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc cc/trees/layer_tree_host.cc
+          bash "$GITHUB_WORKSPACE/.github/scripts/chromium-budget.sh" autoninja -C out/Diagnostic -j 4 chrome 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/control-build.log"
+          cd "$GITHUB_WORKSPACE"
+          node .github/scripts/chromium-trace-overhead.mjs "$RUNNER_TEMP/chromium-ids-runtime/chrome" "$RUNNER_TEMP/chromium/src/out/Diagnostic/chrome" .tmp/chromium-evidence/overhead 2>&1 | tee .tmp/chromium-evidence/overhead.log
+      - name: Keep any failed diagnostic phase visible
+        if: always() && steps.ids_browser.outcome == 'success'
+        env:
+          STATE_OUTCOME: ${{ steps.state_capture.outcome }}
+          SURFACE_OUTCOME: ${{ steps.surface_experiment.outcome }}
+          OVERHEAD_OUTCOME: ${{ steps.overhead.outcome }}
+        run: |
+          test "$STATE_OUTCOME" = success
+          test "$SURFACE_OUTCOME" = success
+          test "$OVERHEAD_OUTCOME" = success
       - name: Preserve compiler, formatter and test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

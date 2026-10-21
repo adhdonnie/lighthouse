@@ -56,7 +56,8 @@ assert.notDeepEqual(defaults, restored);
 const settings = {
   onlyCategories: ['performance'], formFactor: 'mobile', throttlingMethod: 'simulate',
   additionalTraceCategories: 'cc,viz,renderer.scheduler,disabled-by-default-cc.debug,' +
-    'disabled-by-default-devtools.timeline.frame',
+    'disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler,' +
+    'disabled-by-default-viz.surface_id_flow',
 };
 await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({
   order: 'ABBAAB', settings, url, fixture: {htmlSha256: hash(html), cssSha256: hash(css)},

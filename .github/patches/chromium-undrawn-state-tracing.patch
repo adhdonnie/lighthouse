@@ -1,0 +1,22 @@
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -1551,6 +1551,19 @@
+         can_throttle_if_unresponsive_or_excessive &&
+         num_undrawn_frames > kUndrawnFrameLimit &&
+         surface->GetActiveFrameMetadata().may_throttle_if_undrawn_frames;
++
++    // Investigation-only counters; keep the decision predicates unchanged.
++    TRACE_EVENT_INSTANT(
++        "viz", "BeginFrameUndrawnState", "frame_sink_client_id",
++        frame_sink_id_.client_id(), "frame_sink_sink_id",
++        frame_sink_id_.sink_id(), "active_frame_index", active_frame_index,
++        "last_drawn_frame_index", last_drawn_frame_index_,
++        "undrawn_frame_count", num_undrawn_frames,
++        "may_throttle_if_undrawn_frames",
++        surface->GetActiveFrameMetadata().may_throttle_if_undrawn_frames,
++        "time_since_last_frame_ms",
++        (frame_time - last_frame_time_).InMillisecondsF(),
++        "should_throttle_undrawn_frames", should_throttle_undrawn_frames);
+   }
+ 
+   bool frame_timing_details_all_failed = true;
