@@ -1,0 +1,93 @@
+name: Historical mobile scrollbar validation
+on:
+  push:
+    branches: [codex/historical-scrollbar-validation]
+    paths: ['.github/workflows/historical-scrollbar-validation.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: historical-scrollbar-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  history:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+        chrome: ['149.0.7827.155', '150.0.7871.124', '151.0.7922.138', '152.0.7977.82', '153.0.8010.36']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+      HISTORY_CHROME: ${{ matrix.chrome }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19'
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile
+      - run: yarn build-report
+      - name: Allow Chromium user namespaces on Ubuntu
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install pinned full Chrome
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import {install, Browser} from '@puppeteer/browsers';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const installed = await install({browser: Browser.CHROME,
+            buildId: process.env.HISTORY_CHROME, cacheDir: path.resolve('.tmp/history-chrome')});
+          fs.appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${installed.executablePath}\n`);
+          JS
+      - name: Capture every visible and hidden scrollbar control
+        run: node .github/scripts/scrollbar-factor.mjs . .tmp/history-captures
+      - name: Require complete matched captures
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const root = '.tmp/history-captures';
+          const manifest = JSON.parse(fs.readFileSync(`${root}/manifest.json`));
+          const results = JSON.parse(fs.readFileSync(`${root}/results.json`));
+          const requests = JSON.parse(fs.readFileSync(`${root}/requests.json`));
+          assert.equal(manifest.order, 'VHHVVH');
+          assert.equal(results.length, 6);
+          const normalize = args => args.filter(arg =>
+            !/^--(?:remote-debugging-port|user-data-dir)=/.test(arg));
+          for (const [i, row] of results.entries()) {
+            assert.equal(row.arm, manifest.order[i]);
+            assert.equal(row.version.Browser, `Chrome/${process.env.HISTORY_CHROME}`);
+            assert(!row.error && !row.runtimeError, 'Collection must succeed without retries');
+            assert.equal(row.auditErrors.length, 0);
+            assert(Number.isFinite(row.metrics.observedFirstContentfulPaint));
+            assert.deepEqual(normalize(row.processArgs), normalize(results[0].processArgs));
+            assert(row.processArgs.some(arg => arg.includes('RenderDocument')));
+            assert.equal(row.scrollbarCommands.length, 3);
+            assert(row.scrollbarCommands.every(command => command.params.hidden === (row.arm === 'H')));
+            for (const endpoint of ['/about', '/blocking.css']) {
+              const records = requests.filter(request => request.run === row.run && request.url === endpoint);
+              assert(records.length > 0, `Missing ${endpoint} server evidence`);
+              const expected = endpoint === '/about' ? manifest.fixture.htmlSha256 : manifest.fixture.cssSha256;
+              assert(records.every(request => request.sha256 === expected));
+            }
+          }
+          // No timing/score pass threshold: fast samples do not establish absence.
+          console.log(JSON.stringify({complete: true, browser: process.env.HISTORY_CHROME,
+            results: results.map(row => ({run: row.run,
+              fcpMs: row.metrics.observedFirstContentfulPaint}))}, null, 2));
+          JS
+      - name: Preserve every report, trace, process flag and server record
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: History-${{ matrix.os }}-${{ matrix.chrome }}
+          path: .tmp/history-captures/
+          retention-days: 7
