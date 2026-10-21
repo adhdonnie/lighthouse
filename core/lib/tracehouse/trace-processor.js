@@ -1035,9 +1035,22 @@ class TraceProcessor {
     const frameId = frameEvents.map(e => TraceProcessor.getFrameId(e)).find(Boolean);
     const lcpResult = this.computeValidLCPAllFrames(frameEvents, timeOriginEvt, frameId);
 
-    const load = frameEvents.find(e => e.name === 'loadEventEnd' && e.ts > timeOriginEvt.ts);
+    // A previous document can finish loading after a new navigation starts.
+    // Match the painted document's renderer and bound its load events by commits.
+    // Without a matching commit, retain the navigation-origin fallback for older traces.
+    const commitLoad = frameEvents.findLast(e =>
+      e.name === 'CommitLoad' && e.pid === firstContentfulPaint.pid &&
+      e.ts >= timeOriginEvt.ts && e.ts <= firstContentfulPaint.ts);
+    const nextCommitLoad = commitLoad && frameEvents.find(e =>
+      e.name === 'CommitLoad' && e.ts > firstContentfulPaint.ts);
+    const documentStartTimestamp = commitLoad?.ts ?? timeOriginEvt.ts;
+    const documentEndTimestamp = nextCommitLoad?.ts ?? Infinity;
+    /** @param {LH.TraceEvent} event */
+    const belongsToDocument = event => event.ts > documentStartTimestamp &&
+      event.ts < documentEndTimestamp && (!commitLoad || event.pid === commitLoad.pid);
+    const load = frameEvents.find(e => e.name === 'loadEventEnd' && belongsToDocument(e));
     const domContentLoaded = frameEvents.find(
-      e => e.name === 'domContentLoadedEventEnd' && e.ts > timeOriginEvt.ts
+      e => e.name === 'domContentLoadedEventEnd' && belongsToDocument(e)
     );
 
     /** @param {{ts: number}=} event */
