@@ -35,6 +35,11 @@ for (const [index, row] of results.entries()) {
   assert.deepEqual(normalize(row.processArgs), normalized,
     'Only ephemeral profile/port may differ');
   assert(row.processArgs.includes('--test-type=gpu'));
+  if (manifest.normalizedFade) {
+    assert(row.processArgs.includes('--enable-features=DevToolsWebMCPSupport,' +
+      'ScaleScrollbarAnimationTiming:' +
+      'fade_delay_scaling_factor/1.0/fade_duration_scaling_factor/1.0'));
+  }
   assert(row.processArgs.some(arg => arg.startsWith('--disable-features=') &&
     arg.slice('--disable-features='.length).split(',').includes('RenderDocument')));
   assert.equal(row.scrollbarCommands.length, 3);

@@ -7,6 +7,11 @@ on:
       - .github/scripts/historical-no-infobar-factor.mjs
       - .github/scripts/check-historical-no-infobar.mjs
   workflow_dispatch:
+    inputs:
+      normalize_fade:
+        description: Use identical desktop scrollbar fade timing in every browser
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -24,6 +29,7 @@ jobs:
     env:
       PUPPETEER_SKIP_DOWNLOAD: '1'
       HISTORY_CHROME: ${{ matrix.chrome }}
+      HISTORY_NORMALIZE_FADE: ${{ inputs.normalize_fade && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

@@ -67,6 +67,9 @@ const defaults = [...DEFAULT_FLAGS];
 assert(defaults.some(flag => flag.includes('RenderDocument')),
   'Default must disable RenderDocument');
 const order = 'VHHVVH';
+const normalizedFade = process.env.HISTORY_NORMALIZE_FADE === '1';
+const fadeFeature = 'ScaleScrollbarAnimationTiming:' +
+  'fade_delay_scaling_factor/1.0/fade_duration_scaling_factor/1.0';
 assert(/^[VH]+$/.test(order));
 const settings = {
   onlyCategories: ['performance'], formFactor: 'mobile', throttlingMethod: 'simulate',
@@ -75,7 +78,8 @@ const settings = {
     'disabled-by-default-viz.surface_id_flow',
 };
 await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({
-  order, settings, url, sourceFiles: await Promise.all(['core/lib/tracehouse/trace-processor.js',
+  order, normalizedFade, settings, url,
+  sourceFiles: await Promise.all(['core/lib/tracehouse/trace-processor.js',
     'core/lib/network-recorder.js', 'core/gather/gatherers/console-messages.js']
     .map(async file => ({file, sha256: hash(await fs.readFile(path.join(root, file)))}))),
   fixture: {htmlSha256: hash(html), cssSha256: hash(css)},
@@ -112,7 +116,8 @@ try {
     try {
       chrome = await launch({chromePath: process.env.CHROME_PATH, userDataDir: profile,
         chromeFlags: ['--headless=new', '--test-type=gpu',
-          '--enable-features=DevToolsWebMCPSupport'],
+          '--enable-features=' + ['DevToolsWebMCPSupport', normalizedFade && fadeFeature]
+            .filter(Boolean).join(',')],
         port: 0, logLevel: 'silent'});
       chrome.process.on('exit', (code, signal) => {
         browserExitEvents.push({code, signal, wallTime: new Date().toISOString()});
