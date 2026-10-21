@@ -1,0 +1,60 @@
+name: RenderDocument validation
+on:
+  push:
+    branches: [codex/renderdocument-validation]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        chrome: ['153.0.8010.36', '155.0.8059.84']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19'
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile
+      - run: yarn build-report
+      - name: Allow Chromium user namespaces on Ubuntu
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install pinned full Chrome and record executable
+        shell: bash
+        env:
+          MATRIX_CHROME: ${{ matrix.chrome }}
+        run: |
+          node --input-type=module <<'JS'
+          import {install, Browser} from '@puppeteer/browsers';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const installed = await install({browser: Browser.CHROME,
+            buildId: process.env.MATRIX_CHROME, cacheDir: path.resolve('.tmp/matrix-chrome')});
+          fs.appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${installed.executablePath}\n`);
+          JS
+      - run: yarn mocha core/test/gather/gatherers/console-messages-test.js core/test/audits/dobetterweb/geolocation-on-start-test.js core/test/audits/dobetterweb/notification-on-start-test.js core/test/lib/tracehouse/trace-processor-test.js core/test/computed/processed-trace-test.js core/test/computed/metrics/first-contentful-paint-test.js core/test/computed/metrics/largest-contentful-paint-test.js
+      - name: Source checks
+        if: runner.os == 'Linux' && matrix.chrome == '155.0.8059.84'
+        run: |
+          yarn type-check
+          yarn lint
+      - name: Compare launcher defaults with RenderDocument restored
+        run: node .github/scripts/renderdocument-matrix.mjs . .tmp/renderdocument-matrix
+      - name: Preserve reports, traces, console messages and exact process flags
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: RenderDocument-${{ matrix.os }}-${{ matrix.chrome }}
+          path: .tmp/renderdocument-matrix/
+          retention-days: 7
