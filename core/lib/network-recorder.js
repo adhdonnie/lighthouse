@@ -143,8 +143,9 @@ class NetworkRecorder extends RequestEventEmitter {
    */
   onResponseReceivedExtraInfo(event) {
     const data = event.params;
-    const request = this._findRealRequestAndSetSession(
-      data.requestId, event.targetType, event.sessionId);
+    // Worker response metadata can arrive on the parent page/iframe session after
+    // the request has finished. It does not transfer ownership of the request.
+    const request = this._findRealRequest(data.requestId);
     if (!request) return;
     log.verbose('network', `${request.url} response received extra info`);
     request.onResponseReceivedExtraInfo(data);
@@ -224,11 +225,9 @@ class NetworkRecorder extends RequestEventEmitter {
    * message is referring.
    *
    * @param {string} requestId
-   * @param {LH.Protocol.TargetType} targetType
-   * @param {string|undefined} sessionId
    * @return {NetworkRequest|undefined}
    */
-  _findRealRequestAndSetSession(requestId, targetType, sessionId) {
+  _findRealRequest(requestId) {
     let request = this._recordsById.get(requestId);
     if (!request || !request.isValid) return undefined;
 
@@ -236,9 +235,20 @@ class NetworkRecorder extends RequestEventEmitter {
       request = request.redirectDestination;
     }
 
+    return request;
+  }
+
+  /**
+   * @param {string} requestId
+   * @param {LH.Protocol.TargetType} targetType
+   * @param {string|undefined} sessionId
+   * @return {NetworkRequest|undefined}
+   */
+  _findRealRequestAndSetSession(requestId, targetType, sessionId) {
+    const request = this._findRealRequest(requestId);
+    if (!request) return undefined;
     request.setSession(sessionId);
     request.sessionTargetType = targetType;
-
     return request;
   }
 
