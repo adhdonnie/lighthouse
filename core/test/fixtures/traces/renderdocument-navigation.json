@@ -1,0 +1,438 @@
+{
+  "traceEvents": [
+    {
+      "args": {
+        "name": "CrBrowserMain"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17693880,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "Compositor"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694084,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "PerfettoTrace"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694068,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "CrRendererMain"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694033,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "PerfettoTrace"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17693906,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "Chrome_DevToolsHandlerThread"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17693965,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "Chrome_IOThread"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17693914,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "Chrome_ChildIOThread"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694073,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "CacheThread_BlockFile"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17694019,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "CompositorTileWorker1"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17693934,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694071,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolServiceThread"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17693907,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694074,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "MemoryInfra"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 17693915,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694124,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694206,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694208,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694207,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694209,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "ThreadPoolForegroundWorker"
+      },
+      "cat": "__metadata",
+      "name": "thread_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 17694123,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "Browser"
+      },
+      "cat": "__metadata",
+      "name": "process_name",
+      "ph": "M",
+      "pid": 41841,
+      "tid": 0,
+      "ts": 0
+    },
+    {
+      "args": {
+        "name": "Renderer"
+      },
+      "cat": "__metadata",
+      "name": "process_name",
+      "ph": "M",
+      "pid": 41854,
+      "tid": 0,
+      "ts": 0
+    },
+    {
+      "args": {
+        "data": {
+          "frameTreeNodeId": 4,
+          "frames": [
+            {
+              "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED",
+              "isInPrimaryMainFrame": true,
+              "isOutermostMainFrame": true,
+              "name": "",
+              "processId": 41854,
+              "url": "about:blank"
+            }
+          ],
+          "persistentIds": true
+        }
+      },
+      "cat": "disabled-by-default-devtools.timeline",
+      "name": "TracingStartedInBrowser",
+      "ph": "I",
+      "pid": 41841,
+      "s": "t",
+      "tid": 17693880,
+      "ts": 442787789954,
+      "tts": 310799
+    },
+    {
+      "args": {
+        "data": {
+          "documentLoaderURL": "",
+          "isLoadingMainFrame": true,
+          "isOutermostMainFrame": true,
+          "navigationId": "41ACD4976C269ED5F0D5A3328AA247D6"
+        },
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "blink.user_timing",
+      "name": "navigationStart",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442787794077
+    },
+    {
+      "args": {
+        "data": {
+          "documentLoaderURL": "http://localhost:10200/renderdocument.html",
+          "isLoadingMainFrame": true,
+          "isOutermostMainFrame": true,
+          "navigationId": "1B7578D8A638804D5428B6EB58BF008E"
+        },
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "blink.user_timing",
+      "name": "navigationStart",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442787794320
+    },
+    {
+      "args": {
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "blink.user_timing,rail",
+      "name": "domContentLoadedEventEnd",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442787794744
+    },
+    {
+      "args": {
+        "data": {
+          "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED",
+          "isInPrimaryMainFrame": true,
+          "isOutermostMainFrame": true,
+          "name": "",
+          "processId": 41854,
+          "url": "http://localhost:10200/renderdocument.html"
+        }
+      },
+      "cat": "disabled-by-default-devtools.timeline",
+      "name": "FrameCommittedInBrowser",
+      "ph": "I",
+      "pid": 41841,
+      "s": "t",
+      "tid": 17693880,
+      "ts": 442787998176,
+      "tts": 321511
+    },
+    {
+      "args": {
+        "data": {
+          "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED",
+          "isMainFrame": true,
+          "isOutermostMainFrame": true,
+          "name": "",
+          "page": "EA2DAA4B98311E288B947ABE0E9BE3ED",
+          "url": "http://localhost:10200/renderdocument.html"
+        }
+      },
+      "cat": "devtools.timeline",
+      "dur": 29,
+      "name": "CommitLoad",
+      "ph": "X",
+      "pid": 41854,
+      "tdur": 29,
+      "tid": 17694033,
+      "ts": 442788010255,
+      "tts": 1071153
+    },
+    {
+      "args": {
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "blink.user_timing,rail",
+      "name": "domContentLoadedEventEnd",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442788018762
+    },
+    {
+      "args": {
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "blink.user_timing",
+      "name": "loadEventEnd",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442788223617
+    },
+    {
+      "args": {
+        "data": {
+          "navigationId": "1B7578D8A638804D5428B6EB58BF008E"
+        },
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "loading,rail,devtools.timeline",
+      "name": "firstContentfulPaint",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442788268319
+    },
+    {
+      "args": {
+        "data": {
+          "navigationId": "1B7578D8A638804D5428B6EB58BF008E"
+        },
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "loading,rail,devtools.timeline",
+      "name": "firstPaint",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442788268319
+    },
+    {
+      "args": {
+        "data": {
+          "candidateIndex": 1,
+          "isMainFrame": true,
+          "isOutermostMainFrame": true,
+          "navigationId": "1B7578D8A638804D5428B6EB58BF008E",
+          "nodeId": 7,
+          "nodeName": "H1",
+          "performanceTimelineNavigationId": 6377,
+          "size": 12502,
+          "type": "text"
+        },
+        "frame": "EA2DAA4B98311E288B947ABE0E9BE3ED"
+      },
+      "cat": "loading,rail,devtools.timeline",
+      "name": "largestContentfulPaint::Candidate",
+      "ph": "R",
+      "pid": 41854,
+      "s": "t",
+      "tid": 17694033,
+      "ts": 442788268319
+    }
+  ]
+}

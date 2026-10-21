@@ -507,6 +507,158 @@ describe('TraceProcessor', () => {
     });
 
     describe('.processNavigation()', () => {
+      it('associates load events with the committed document in a RenderDocument trace', () => {
+        // Reduced Chrome 155 trace: about:blank's DCL fires after the requested navigation starts.
+        const trace = readJson('../../fixtures/traces/renderdocument-navigation.json', import.meta);
+        const navigation = TraceProcessor.processNavigation(TraceProcessor.processTrace(trace));
+        assert.equal(navigation.timestamps.timeOrigin, 442787794320);
+        assert.equal(navigation.timings.domContentLoaded, 224.442);
+        assert.equal(navigation.timings.load, 429.297);
+        assert.equal(navigation.timings.firstContentfulPaint, 473.999);
+        assert.equal(navigation.timings.largestContentfulPaint, 473.999);
+      });
+
+      for (const example of [
+        {file: 'traces/bad-nav-start-ts.json', dcl: 1570.194, fcp: 632.419, load: 1994.473},
+        {file: 'traces/tracingstarted-after-navstart.json', dcl: 77.884, fcp: 80.054, load: 78.79},
+        {file: 'user-flows/artifacts/step3/trace.json', dcl: 188.407, fcp: 263.452, load: 476.329},
+      ]) {
+        it(`excludes the pre-commit DCL in ${example.file}`, () => {
+          const trace = readJson(`../../fixtures/${example.file}`, import.meta);
+          const navigation = TraceProcessor.processNavigation(TraceProcessor.processTrace(trace));
+          assert.equal(navigation.timings.domContentLoaded, example.dcl);
+          assert.equal(navigation.timings.firstContentfulPaint, example.fcp);
+          assert.equal(navigation.timings.load, example.load);
+        });
+      }
+
+      it('ignores previous-document load events before the contentful document commits', () => {
+        const trace = createTestTrace({
+          timeOrigin: 1000,
+          firstContentfulPaint: 1500,
+          largestContentfulPaint: 1500,
+          traceEnd: 2000,
+        });
+        trace.traceEvents = trace.traceEvents.filter(e => e.name !== 'domContentLoadedEventEnd');
+        /** @type {Array<[string, number]>} */
+        const events = [
+          ['domContentLoadedEventEnd', 1000.4],
+          ['loadEventEnd', 1001],
+          ['CommitLoad', 1200],
+          ['domContentLoadedEventEnd', 1224],
+          ['loadEventEnd', 1429],
+          // A later document must not move the boundary past the selected FCP.
+          ['CommitLoad', 1600],
+        ];
+        for (const [name, ts] of events) {
+          trace.traceEvents.push({
+            name,
+            ts: ts * 1000,
+            pid: 1111,
+            tid: 222,
+            ph: 'I',
+            cat: 'devtools.timeline',
+            args: {data: {frame: 'ROOT_FRAME'}},
+          });
+        }
+        const processedTrace = TraceProcessor.processTrace(trace);
+        const navigation = TraceProcessor.processNavigation(processedTrace);
+        assert.equal(navigation.timings.domContentLoaded, 224);
+        assert.equal(navigation.timings.load, 429);
+        assert.equal(navigation.timings.firstContentfulPaint, 500);
+      });
+
+      it('keeps load timings when the trace has no document commit event', () => {
+        const trace = createTestTrace({timeOrigin: 1000, firstContentfulPaint: 1500});
+        trace.traceEvents = trace.traceEvents.filter(e => e.name !== 'domContentLoadedEventEnd');
+        trace.traceEvents.push({
+          name: 'domContentLoadedEventEnd',
+          ts: 1224000,
+          pid: 1111,
+          tid: 222,
+          ph: 'I',
+          cat: 'devtools.timeline',
+          args: {frame: 'ROOT_FRAME'},
+        });
+        const processedTrace = TraceProcessor.processTrace(trace);
+        const navigation = TraceProcessor.processNavigation(processedTrace);
+        assert.equal(navigation.timings.domContentLoaded, 224);
+      });
+
+      for (const scenario of [
+        {name: 'iframe commits', frame: 'CHILD_FRAME', commit: 1300},
+        {name: 'commits before the navigation', frame: 'ROOT_FRAME', commit: 900},
+        {name: 'commits after FCP', frame: 'ROOT_FRAME', commit: 1600},
+      ]) {
+        it(`ignores ${scenario.name} when selecting load events`, () => {
+          const trace = createTestTrace({timeOrigin: 1000, firstContentfulPaint: 1500});
+          trace.traceEvents.push({
+            name: 'CommitLoad', ts: scenario.commit * 1000, pid: 1111, tid: 222,
+            ph: 'X', cat: 'devtools.timeline',
+            args: {data: {frame: scenario.frame}},
+          });
+          const navigation = TraceProcessor.processNavigation(TraceProcessor.processTrace(trace));
+          assert.equal(navigation.timings.domContentLoaded, 0.01);
+        });
+      }
+
+      it('allows FCP before DCL after a redirected document commits', () => {
+        const trace = createTestTrace({timeOrigin: 1000, firstContentfulPaint: 1250});
+        trace.traceEvents = trace.traceEvents.filter(e => e.name !== 'domContentLoadedEventEnd');
+        trace.traceEvents.push({
+          name: 'CommitLoad', ts: 1200000, pid: 1111, tid: 222,
+          ph: 'X', cat: 'devtools.timeline',
+          args: {data: {frame: 'ROOT_FRAME', url: 'https://example.com/redirected'}},
+        }, {
+          name: 'domContentLoadedEventEnd', ts: 1300000, pid: 1111, tid: 222,
+          ph: 'R', cat: 'blink.user_timing', args: {frame: 'ROOT_FRAME'},
+        });
+        const navigation = TraceProcessor.processNavigation(TraceProcessor.processTrace(trace));
+        assert.equal(navigation.timings.domContentLoaded, 300);
+        assert.equal(navigation.timings.firstContentfulPaint, 250);
+      });
+
+      it('ignores commits from another renderer when selecting the painted document', () => {
+        const trace = createTestTrace({timeOrigin: 1000, firstContentfulPaint: 1500});
+        trace.traceEvents = trace.traceEvents.filter(e => e.name !== 'domContentLoadedEventEnd');
+        trace.traceEvents.push({
+          name: 'CommitLoad', ts: 1200000, pid: 1111, tid: 222,
+          ph: 'X', cat: 'devtools.timeline', args: {data: {frame: 'ROOT_FRAME'}},
+        }, {
+          name: 'domContentLoadedEventEnd', ts: 1210000, pid: 3333, tid: 444,
+          ph: 'R', cat: 'blink.user_timing', args: {frame: 'ROOT_FRAME'},
+        }, {
+          name: 'domContentLoadedEventEnd', ts: 1224000, pid: 1111, tid: 222,
+          ph: 'R', cat: 'blink.user_timing', args: {frame: 'ROOT_FRAME'},
+        }, {
+          name: 'CommitLoad', ts: 1300000, pid: 3333, tid: 444,
+          ph: 'X', cat: 'devtools.timeline', args: {data: {frame: 'ROOT_FRAME'}},
+        });
+        const navigation = TraceProcessor.processNavigation(TraceProcessor.processTrace(trace));
+        assert.equal(navigation.timings.domContentLoaded, 224);
+      });
+
+      it('does not borrow load events after another document commits', () => {
+        const trace = createTestTrace({timeOrigin: 1000, firstContentfulPaint: 1250});
+        trace.traceEvents = trace.traceEvents.filter(e => e.name !== 'domContentLoadedEventEnd');
+        /** @type {Array<[string, number]>} */
+        const events = [
+          ['CommitLoad', 1200],
+          ['CommitLoad', 1500],
+          ['domContentLoadedEventEnd', 1600],
+          ['loadEventEnd', 1700],
+        ];
+        for (const [name, ts] of events) {
+          trace.traceEvents.push({
+            name, ts: ts * 1000, pid: 1111, tid: 222,
+            ph: 'I', cat: 'devtools.timeline', args: {data: {frame: 'ROOT_FRAME'}},
+          });
+        }
+        const navigation = TraceProcessor.processNavigation(TraceProcessor.processTrace(trace));
+        assert.equal(navigation.timings.domContentLoaded, undefined);
+        assert.equal(navigation.timings.load, undefined);
+      });
+
       it('gathers the events from the tab\'s process', () => {
         const trace = TraceProcessor.processTrace(startedAfterNavstartTrace);
         const navigation = TraceProcessor.processNavigation(trace);
