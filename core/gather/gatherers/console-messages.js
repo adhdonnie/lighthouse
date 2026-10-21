@@ -12,6 +12,11 @@
 
 import BaseGatherer from '../base-gatherer.js';
 
+// Negative thresholds include zero-duration violations. Avoid -1, the unset
+// value of InspectorLogAgent's persisted map, so reporting survives navigation.
+// https://chromium.googlesource.com/chromium/src/+/refs/tags/155.0.8059.85/third_party/blink/renderer/core/inspector/inspector_log_agent.cc
+const DISCOURAGED_API_USE_THRESHOLD = -0.5;
+
 /**
  * @param {LH.Crdp.Runtime.RemoteObject} obj
  * @return {string}
@@ -142,7 +147,7 @@ class ConsoleMessages extends BaseGatherer {
     session.on('Log.entryAdded', this._onLogEntryAdded);
     await session.sendCommand('Log.enable');
     await session.sendCommand('Log.startViolationsReport', {
-      config: [{name: 'discouragedAPIUse', threshold: -1}],
+      config: [{name: 'discouragedAPIUse', threshold: DISCOURAGED_API_USE_THRESHOLD}],
     });
 
     session.on('Runtime.consoleAPICalled', this._onConsoleAPICalled);
