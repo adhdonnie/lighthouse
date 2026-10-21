@@ -1,0 +1,79 @@
+name: Historical paint-holding causal validation
+on:
+  push:
+    branches: [codex/paint-holding-history-validation]
+    paths:
+      - .github/workflows/paint-holding-history-validation.yml
+      - .github/scripts/paint-holding-history-factor.mjs
+      - .github/scripts/check-paint-holding-history.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: paint-holding-history-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  history:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+        chrome: ['131.0.6755.0', '131.0.6756.0']
+        fade: [normalized, amplified]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+      HISTORY_CHROME: ${{ matrix.chrome }}
+      HISTORY_FADE_MODE: ${{ matrix.fade }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19'
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile
+      - run: yarn build-report
+      - name: Allow Chromium user namespaces on Ubuntu
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install and identify pinned full Chrome
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import {install, Browser, BrowserPlatform} from '@puppeteer/browsers';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import {createHash} from 'node:crypto';
+          const platform = process.platform === 'win32' ? BrowserPlatform.WIN64 : BrowserPlatform.LINUX;
+          const installed = await install({browser: Browser.CHROME, platform,
+            buildId: process.env.HISTORY_CHROME, cacheDir: path.resolve('.tmp/history-chrome')});
+          const hash = createHash('sha256');
+          for await (const chunk of fs.createReadStream(installed.executablePath)) hash.update(chunk);
+          fs.mkdirSync('.tmp/paint-holding-history-captures', {recursive: true});
+          const files = ['.github/scripts/paint-holding-history-factor.mjs',
+            '.github/scripts/check-paint-holding-history.mjs', 'yarn.lock'];
+          fs.writeFileSync('.tmp/paint-holding-history-captures/browser-install.json', JSON.stringify({
+            version: process.env.HISTORY_CHROME, platform, executablePath: installed.executablePath,
+            executableSha256: hash.digest('hex'), runnerOS: process.env.RUNNER_OS,
+            runnerImage: process.env.ImageVersion, gitSha: process.env.GITHUB_SHA,
+            node: process.version, sources: files.map(file => ({file,
+              sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex')})),
+          }, null, 2));
+          fs.appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${installed.executablePath}\n`);
+          JS
+      - name: Capture all six paint-holding interventions without retries
+        run: node .github/scripts/paint-holding-history-factor.mjs . .tmp/paint-holding-history-captures
+      - name: Require matched inputs and complete supported metrics
+        run: node .github/scripts/check-paint-holding-history.mjs .tmp/paint-holding-history-captures ${{ matrix.chrome }} ${{ matrix.fade }}
+      - name: Preserve every success, failure, log and raw trace
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: PaintHoldingHistory-${{ matrix.os }}-${{ matrix.chrome }}-${{ matrix.fade }}
+          path: .tmp/paint-holding-history-captures
+          retention-days: 7
+          if-no-files-found: error
