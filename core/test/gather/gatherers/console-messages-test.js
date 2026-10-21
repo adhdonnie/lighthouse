@@ -60,7 +60,11 @@ describe('ConsoleMessages', () => {
       if (!address || typeof address === 'string') throw new Error('Expected a TCP address');
       browser = await puppeteer.launch({
         executablePath: getChromePath(),
-        args: ['--enable-features=RenderDocument'],
+        args: [
+          '--enable-features=RenderDocument',
+          '--site-per-process',
+          '--host-resolver-rules=MAP localhost 127.0.0.1',
+        ],
       });
       const page = await browser.newPage();
       driver = new Driver(page);
@@ -68,8 +72,9 @@ describe('ConsoleMessages', () => {
       const gatherer = new ConsoleMessagesGatherer();
       // Subscribe before navigation, just as navigation gathering does on about:blank.
       await gatherer.startInstrumentation({driver});
-      for (let i = 0; i < 2; i++) {
-        const url = `http://127.0.0.1:${address.port}/?navigation=${i}`;
+      // Cover same-site replacements and a cross-site navigation with site isolation.
+      for (const [i, host] of ['127.0.0.1', '127.0.0.1', 'localhost'].entries()) {
+        const url = `http://${host}:${address.port}/?navigation=${i}`;
         await page.goto(url);
         const messages = await gatherer.getArtifact();
         for (const text of ['document.write', 'geolocation', 'notification permission']) {
