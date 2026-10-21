@@ -92,21 +92,29 @@ try {
         row.error = {message: error.message, stack: error.stack};
       } finally {
         clearTimeout(timeout);
-        if (chrome) await chrome.kill();
         try {
-          const filename = path.join(profile, 'Default/Preferences');
-          const prefs = JSON.parse(await fs.readFile(filename, 'utf8'));
-          row.cookiePreferences = {
-            mode: prefs.profile?.cookie_controls_mode,
-            blockThirdParty: prefs.profile?.block_third_party_cookies,
-          };
-        } catch {}
-        await fs.rm(profile, {recursive: true, force: true});
+          if (chrome) await chrome.kill();
+          try {
+            const filename = path.join(profile, 'Default/Preferences');
+            const prefs = JSON.parse(await fs.readFile(filename, 'utf8'));
+            row.cookiePreferences = {
+              mode: prefs.profile?.cookie_controls_mode,
+              blockThirdParty: prefs.profile?.block_third_party_cookies,
+            };
+          } catch {}
+          // Windows can retain file handles briefly after taskkill completes.
+          await fs.rm(profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 200});
+        } catch (error) {
+          row.cleanupError = {message: error.message, stack: error.stack};
+        }
         results.push(row);
         await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
         console.log(JSON.stringify({id, arm, assertions: row.assertions,
-          runtimeError: row.runtimeError, error: row.error?.message}));
+          runtimeError: row.runtimeError, error: row.error?.message,
+          cleanupError: row.cleanupError?.message}));
       }
+      // Preserve the result before aborting if a browser/profile could not be cleaned up.
+      if (row.cleanupError) throw new Error(row.cleanupError.message);
     }
   }
 } finally {
@@ -114,6 +122,7 @@ try {
   await Promise.all(servers.map(server => server.close()));
 }
 // Keep baseline failures visible; never silently reclassify them as passing.
-if (results.some(row => row.error || row.runtimeError || row.assertions?.failed)) {
+if (results.some(row => row.error || row.cleanupError ||
+    row.runtimeError || row.assertions?.failed)) {
   process.exitCode = 1;
 }

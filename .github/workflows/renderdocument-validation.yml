@@ -5,7 +5,22 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: renderdocument-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  chromium-capacity:
+    name: Chromium build capacity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect ephemeral runner capacity
+        run: |
+          df -h / /mnt
+          free -h
+          for directory in /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup /usr/local/share/powershell /usr/share/swift /opt/codeql; do
+            if [ -d "$directory" ]; then sudo du -sh "$directory"; fi
+          done
   matrix:
     strategy:
       fail-fast: false
@@ -43,7 +58,19 @@ jobs:
             buildId: process.env.MATRIX_CHROME, cacheDir: path.resolve('.tmp/matrix-chrome')});
           fs.appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${installed.executablePath}\n`);
           JS
-      - run: yarn mocha core/test/gather/gatherers/console-messages-test.js core/test/audits/dobetterweb/geolocation-on-start-test.js core/test/audits/dobetterweb/notification-on-start-test.js core/test/lib/tracehouse/trace-processor-test.js core/test/computed/processed-trace-test.js core/test/computed/metrics/first-contentful-paint-test.js core/test/computed/metrics/largest-contentful-paint-test.js
+      - name: Targeted regressions (require nine files and at least 92 tests)
+        shell: bash
+        run: |
+          set -o pipefail
+          yarn mocha console-messages-test.js geolocation-on-start-test.js notification-on-start-test.js trace-processor-test.js processed-trace-test.js first-contentful-paint-test.js largest-contentful-paint-test.js --retries=0 2>&1 | tee .tmp/renderdocument-unit.log
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const log = fs.readFileSync('.tmp/renderdocument-unit.log', 'utf8').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+          const passing = log.match(/\b(\d+) passing\b/);
+          if (!/^running 9 test files$/m.test(log) || !passing || Number(passing[1]) < 92) {
+            throw new Error('The targeted regression suite did not execute completely');
+          }
+          JS
       - name: Source checks
         if: runner.os == 'Linux' && matrix.chrome == '155.0.8059.84'
         run: |
@@ -56,5 +83,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: RenderDocument-${{ matrix.os }}-${{ matrix.chrome }}
-          path: .tmp/renderdocument-matrix/
+          path: |
+            .tmp/renderdocument-matrix/
+            .tmp/renderdocument-unit.log
           retention-days: 7
