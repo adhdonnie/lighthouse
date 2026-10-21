@@ -54,6 +54,7 @@ jobs:
           gclient sync --nohooks --no-history --revision "src@refs/tags/$CHROMIUM_VERSION" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/sync.log"
           cd src
           git rev-parse HEAD | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chromium-revision.txt"
+          cat chrome/VERSION | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chromium-version.txt"
           sudo ./build/install-build-deps.sh --no-prompt --no-arm 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/dependencies.log"
           gclient runhooks 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/hooks.log"
       - name: Apply diagnostic patch and check checkout formatter
