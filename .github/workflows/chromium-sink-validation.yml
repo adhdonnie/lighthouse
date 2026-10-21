@@ -1,0 +1,107 @@
+name: Chromium sink diagnostic validation
+on:
+  push:
+    branches: [codex/chromium-sink-validation]
+    paths:
+      - '.github/workflows/chromium-sink-validation.yml'
+      - '.github/patches/chromium-sink-tracing.patch'
+      - '.github/scripts/chromium-sink-capture.mjs'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: chromium-sink-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      DEPOT_TOOLS_UPDATE: '0'
+      CHROMIUM_VERSION: '155.0.8059.85'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare disposable hosted build space
+        shell: bash
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          mkdir -p .tmp/chromium-evidence
+          df -h / | tee .tmp/chromium-evidence/disk-before.txt
+          # This job has its own disposable VM. Remove only unused preinstalled SDKs.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/local/.ghcup /usr/local/share/powershell /usr/share/swift
+          sudo swapoff -a
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo fallocate -l 16G /mnt/chromium.swap
+          sudo chmod 600 /mnt/chromium.swap
+          sudo mkswap /mnt/chromium.swap
+          sudo swapon /mnt/chromium.swap
+          df -h / | tee .tmp/chromium-evidence/disk-ready.txt
+          free -h | tee .tmp/chromium-evidence/memory-ready.txt
+          test "$(df --output=avail -BG / | tail -1 | tr -dc '0-9')" -ge 100
+      - name: Sync pinned Chromium source and toolchain
+        shell: bash
+        run: |
+          set -o pipefail
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
+          git -C "$RUNNER_TEMP/depot_tools" checkout f2ac30836f43e58e4f79a8d969a88057e7704ab2
+          export PATH="$RUNNER_TEMP/depot_tools:$PATH"
+          echo "$RUNNER_TEMP/depot_tools" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/chromium"
+          cd "$RUNNER_TEMP/chromium"
+          gclient config --spec 'solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "deps_file": "DEPS", "managed": False, "custom_deps": {}, "custom_vars": {}}]'
+          gclient sync --nohooks --no-history --revision "src@refs/tags/$CHROMIUM_VERSION" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/sync.log"
+          cd src
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chromium-revision.txt"
+          sudo ./build/install-build-deps.sh --no-prompt --no-arm 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/dependencies.log"
+          gclient runhooks 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/hooks.log"
+      - name: Apply diagnostic patch and check checkout formatter
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/chromium/src"
+          git apply --check "$GITHUB_WORKSPACE/.github/patches/chromium-sink-tracing.patch"
+          git apply "$GITHUB_WORKSPACE/.github/patches/chromium-sink-tracing.patch"
+          git cl format --upstream=HEAD --dry-run -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/format.log"
+          git diff --check
+          git diff > "$GITHUB_WORKSPACE/.tmp/chromium-evidence/applied.patch"
+          gn gen out/Diagnostic --args='is_debug=false is_component_build=true symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_remoteexec=false use_siso=true'
+      - name: Build and run compositor regression tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/chromium/src"
+          autoninja -C out/Diagnostic -j 4 viz_unittests 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-build.log"
+          out/Diagnostic/viz_unittests --gtest_filter='*CompositorFrameSinkSupportTest*:*VideoCadenceThrottlingTest*' --gtest_output="json:$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-tests.json" 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/viz-tests.log"
+      - name: Build diagnostic browser
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/chromium/src"
+          autoninja -C out/Diagnostic -j 4 chrome 2>&1 | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/chrome-build.log"
+          out/Diagnostic/chrome --version | tee "$GITHUB_WORKSPACE/.tmp/chromium-evidence/browser-version.txt"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19'
+      - name: Capture sink-resolved controlled traces
+        shell: bash
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+        run: |
+          set -o pipefail
+          corepack enable
+          yarn install --frozen-lockfile
+          yarn build-report
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          CHROME_PATH="$RUNNER_TEMP/chromium/src/out/Diagnostic/chrome" node .github/scripts/chromium-sink-capture.mjs .tmp/chromium-evidence/captures 2>&1 | tee .tmp/chromium-evidence/capture.log
+          for trace in .tmp/chromium-evidence/captures/*.trace.json.gz; do
+            node .github/scripts/check-sink-trace.mjs "$trace" > "$trace.sinks.json"
+          done
+      - name: Preserve compiler, formatter and test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Chromium-sink-validation
+          path: .tmp/chromium-evidence/
+          retention-days: 7

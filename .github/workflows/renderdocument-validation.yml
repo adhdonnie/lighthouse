@@ -58,16 +58,16 @@ jobs:
             buildId: process.env.MATRIX_CHROME, cacheDir: path.resolve('.tmp/matrix-chrome')});
           fs.appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${installed.executablePath}\n`);
           JS
-      - name: Targeted regressions (require nine files and at least 92 tests)
+      - name: Targeted regressions (require ten files and at least 115 tests)
         shell: bash
         run: |
           set -o pipefail
-          yarn mocha console-messages-test.js geolocation-on-start-test.js notification-on-start-test.js trace-processor-test.js processed-trace-test.js first-contentful-paint-test.js largest-contentful-paint-test.js --retries=0 2>&1 | tee .tmp/renderdocument-unit.log
+          yarn mocha network-recorder-test.js console-messages-test.js geolocation-on-start-test.js notification-on-start-test.js trace-processor-test.js processed-trace-test.js first-contentful-paint-test.js largest-contentful-paint-test.js --retries=0 2>&1 | tee .tmp/renderdocument-unit.log
           node --input-type=module <<'JS'
           import fs from 'node:fs';
           const log = fs.readFileSync('.tmp/renderdocument-unit.log', 'utf8').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
           const passing = log.match(/\b(\d+) passing\b/);
-          if (!/^running 9 test files$/m.test(log) || !passing || Number(passing[1]) < 92) {
+          if (!/^running 10 test files$/m.test(log) || !passing || Number(passing[1]) < 115) {
             throw new Error('The targeted regression suite did not execute completely');
           }
           JS

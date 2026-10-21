@@ -1,0 +1,99 @@
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -77,9 +77,12 @@
+ BASE_FEATURE(kCleanupOrphanedReservedResourceIds,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+-bool RecordShouldSendBeginFrame(const std::string& reason, bool should_send) {
+-  TRACE_EVENT2("viz", "SendBeginFrameDecision", "reason", reason, "should_send",
+-               should_send);
++bool RecordShouldSendBeginFrame(const FrameSinkId& frame_sink_id,
++                                const std::string& reason,
++                                bool should_send) {
++  TRACE_EVENT("viz", "SendBeginFrameDecision", "reason", reason, "should_send",
++              should_send, "frame_sink_client_id", frame_sink_id.client_id(),
++              "frame_sink_sink_id", frame_sink_id.sink_id());
+   return should_send;
+ }
+ 
+@@ -1511,7 +1514,8 @@
+   // BeginFrameObserver before the next BeginFrame arrives. See
+   // https://crbug.com/40286473.
+   if (frame_id == last_begin_frame_args_.frame_id) {
+-    return RecordShouldSendBeginFrame("DuplicateFrameId", false);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "DuplicateFrameId",
++                                      false);
+   }
+ 
+   // We should throttle OnBeginFrame() if it has been less than
+@@ -1562,53 +1566,60 @@
+   // begin-frame.
+   if (!frame_timing_details_.empty() && !should_throttle_as_requested &&
+       (!should_throttle_undrawn_frames || !frame_timing_details_all_failed)) {
+-    return RecordShouldSendBeginFrame("SendFrameTiming", true);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "SendFrameTiming", true);
+   }
+ 
+   if (base::FeatureList::IsEnabled(features::kNoCompositorFrameAcks)) {
+     const int pending_frames_limit =
+         features::kNumberPendingFramesUntilThrottle.Get();
+     if (pending_frames_ >= pending_frames_limit) {
+-      return RecordShouldSendBeginFrame("PendingAck", false);
++      return RecordShouldSendBeginFrame(frame_sink_id_, "PendingAck", false);
+     }
+   }
+ 
+   if (!client_needs_begin_frame_ && !layer_context_wants_begin_frames_) {
+-    return RecordShouldSendBeginFrame("StopNotRequested", false);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "StopNotRequested",
++                                      false);
+   }
+ 
+   // Stop sending BeginFrames to clients that are totally unresponsive.
+   if (begin_frame_tracker_.ShouldStopBeginFrame()) {
+-    return RecordShouldSendBeginFrame("StopUnresponsiveClient", false);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "StopUnresponsiveClient",
++                                      false);
+   }
+ 
+   // Throttle clients that are unresponsive.
+   if (can_throttle_if_unresponsive_or_excessive &&
+       begin_frame_tracker_.ShouldThrottleBeginFrame()) {
+-    return RecordShouldSendBeginFrame("ThrottleUnresponsiveClient", false);
++    return RecordShouldSendBeginFrame(frame_sink_id_,
++                                      "ThrottleUnresponsiveClient", false);
+   }
+ 
+   if (!last_activated_surface_id_.is_valid()) {
+-    return RecordShouldSendBeginFrame("SendNoActiveSurface", true);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "SendNoActiveSurface",
++                                      true);
+   }
+ 
+   // We should never throttle BeginFrames if there is another client waiting
+   // for this client to submit a frame.
+   if (surface_manager_->HasBlockedEmbedder(frame_sink_id_)) {
+-    return RecordShouldSendBeginFrame("SendBlockedEmbedded", true);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "SendBlockedEmbedded",
++                                      true);
+   }
+ 
+   if (should_throttle_as_requested) {
+     ++frames_throttled_since_last_;
+-    return RecordShouldSendBeginFrame("ThrottleRequested", false);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "ThrottleRequested",
++                                      false);
+   }
+ 
+   if (should_throttle_undrawn_frames) {
+-    return RecordShouldSendBeginFrame("ThrottleUndrawnFrames", false);
++    return RecordShouldSendBeginFrame(frame_sink_id_, "ThrottleUndrawnFrames",
++                                      false);
+   }
+ 
+   // No other conditions apply so send the begin frame.
+-  return RecordShouldSendBeginFrame("SendDefault", true);
++  return RecordShouldSendBeginFrame(frame_sink_id_, "SendDefault", true);
+ }
+ 
+ void CompositorFrameSinkSupport::CheckPendingSurfaces() {
