@@ -222,6 +222,33 @@ describe('network recorder', function() {
     ]);
   });
 
+  for (const parentTargetType of ['page', 'iframe']) {
+    for (const metadataFirst of [false, true]) {
+      it(`preserves worker ownership: ${parentTargetType}, metadata first=${metadataFirst}`, () => {
+        const log = networkRecordsToDevtoolsLog([
+          {url: 'http://example.com/worker.js', sessionId: 'worker', sessionTargetType: 'worker'},
+        ]);
+        const requestId = log[0].params.requestId;
+        const metadata = {
+          method: 'Network.responseReceivedExtraInfo',
+          targetType: parentTargetType,
+          sessionId: 'parent',
+          params: {
+            requestId, blockedCookies: [], headers: {'x-test': 'preserved'},
+            resourceIPAddressSpace: 'Local', statusCode: 200, headersText: 'HTTP/1.1 200 OK',
+          },
+        };
+        // Chrome can deliver worker metadata on its parent session, even after loadingFinished.
+        log.splice(metadataFirst ? 1 : log.length, 0, metadata);
+        const [record] = NetworkRecorder.recordsFromLogs(log);
+        expect(record).toMatchObject({
+          sessionId: 'worker', sessionTargetType: 'worker',
+          responseHeadersText: 'HTTP/1.1 200 OK',
+        });
+      });
+    }
+  }
+
   it('should handle prefetch requests', () => {
     const records = NetworkRecorder.recordsFromLogs(prefetchedScriptDevtoolsLog);
     expect(records).toHaveLength(5);
