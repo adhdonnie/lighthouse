@@ -1,8 +1,5 @@
 name: Chromium exact-source checkpoint pilot
 on:
-  push:
-    branches: [codex/chromium-parent-surface-fix]
-    paths: [.github/workflows/chromium-checkpoint-pilot.yml]
   workflow_dispatch:
 env:
   LC_ALL: C.UTF-8

@@ -1,0 +1,46 @@
+name: Chromium apt resolver environment probe
+on:
+  push:
+    branches: [codex/chromium-parent-surface-fix]
+    paths: [.github/workflows/chromium-apt-resolver-probe.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: chromium-apt-resolver-probe
+  cancel-in-progress: false
+jobs:
+  register:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: echo 'Manual apt diagnostic registered; no probe executed.'
+  probe:
+    if: github.event_name == 'workflow_dispatch'
+    name: Apt simulation (${{ matrix.environment }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [native, normalized]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Compare exact pinned installer simulation under one explicit environment
+        timeout-minutes: 22
+        shell: bash
+        run: |
+          python3 .github/scripts/chromium-apt-resolver-probe.py \
+            --case '${{ matrix.environment }}' \
+            --out "$RUNNER_TEMP/apt-resolver-evidence"
+      - name: Preserve all evidence including timeout and resolver state
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Chromium-apt-resolver-${{ matrix.environment }}
+          path: ${{ runner.temp }}/apt-resolver-evidence
+          retention-days: 7
+          if-no-files-found: error
