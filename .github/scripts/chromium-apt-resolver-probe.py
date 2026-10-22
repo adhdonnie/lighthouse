@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, read-only install simulation. No Chromium checkout or apt install."""
+"""Bounded disposable-runner package diagnostic. No Chromium checkout."""
 import argparse
 import base64
 import hashlib
@@ -35,6 +35,8 @@ def main():
     parser.add_argument('--case', choices=['native','normalized'], required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--packages-only', action='store_true')
+    parser.add_argument('--install-packages', action='store_true',
+                        help='Run exact package installation on a disposable hosted VM')
     a = parser.parse_args()
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -54,6 +56,11 @@ def main():
         target = out / f'{label}-proc-{int(time.monotonic())}.txt'
         commands = [['ps','-eo','pid,ppid,pgid,stat,pcpu,pmem,etime,wchan:32,args','--forest'],
                     ['free','-h'],['df','-h','/']]
+        if a.install_packages:
+            commands += [['sudo','-n','ss','-tpn'],['sudo','-n','lslocks'],
+                         ['sudo','-n','find','/var/cache/apt/archives/partial','-maxdepth','1',
+                          '-type','f','-printf','%f %s %T@\n'],
+                         ['sudo','-n','tail','-n','30','/var/log/dpkg.log']]
         with target.open('w') as f:
             for cmd in commands:
                 p = subprocess.run(cmd,capture_output=True,text=True,timeout=10)
@@ -120,6 +127,34 @@ def main():
     (out/'requested-packages.sha256').write_text(hashlib.sha256('\n'.join(packages).encode()).hexdigest()+'\n')
     bounded('package-policy',['apt-cache','policy',*packages],parent,60)
     if a.packages_only:return 0
+    if a.install_packages:
+        assert os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted', 'Disposable hosted VM required'
+        # Isolate only the previously silent stage. No changed package selection,
+        # apt flags, retries, fonts, source checkout, or compiler work.
+        install_code = r"""import importlib.util,json,subprocess,sys,time
+spec=importlib.util.spec_from_file_location('pinned',sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+def traced(original):
+    def run(argv,*args,**kwargs):
+        started=time.monotonic()
+        print('COMMAND_START '+json.dumps(argv),flush=True)
+        try:
+            return original(argv,*args,**kwargs)
+        finally:
+            print('COMMAND_END '+json.dumps({'argv':argv,'seconds':time.monotonic()-started}),flush=True)
+    return run
+subprocess.check_output=traced(subprocess.check_output)
+subprocess.check_call=traced(subprocess.check_call)
+m.install_packages(m.parse_args(['--no-prompt','--no-arm']))
+"""
+        result = bounded('install-packages',
+            ['sudo','-n','timeout','--signal=TERM','--kill-after=10s','600s',
+             '/usr/bin/python3','-c',install_code,str(source)], parent, 630)
+        bounded('apt-history',['sudo','-n','tail','-n','150','/var/log/apt/term.log','/var/log/apt/history.log'],parent,30)
+        bounded('package-state-after',['dpkg-query','-W','-f','${binary:Package}\t${Version}\t${Architecture}\n'],parent,30)
+        (out/'summary.json').write_text(json.dumps({'case':a.case,'phase':'package-install',
+            'packageCount':len(packages),'installation':result},indent=2))
+        return 1 if result['timedOut'] or result['exitCode'] else 0
     # stdout=PIPE matches check_output; both streams drained, stderr recorded.
     bounded('query-root-identity',['sudo','-n','id'],parent,30)
     exact=bounded('exact-simulation',installer_query(['--just-print','install',*packages],query_env),query_env,300)
