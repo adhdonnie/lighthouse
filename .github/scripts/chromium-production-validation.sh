@@ -77,7 +77,14 @@ case "$suite" in
   *) echo "Unknown suite $suite" >&2; exit 64;;
 esac
 format_and_record initial
-buildtools/linux64/gn gen out/Validation --args='is_debug=false is_component_build=true symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_remoteexec=false use_siso=true' \
+is_debug=false
+if [ "$suite" = policy ]; then
+  # Policy assertions need full browser behavior, not optimized timing. Keep all
+  # subsystems and enable debug checks while avoiding Release optimization cost.
+  is_debug=true
+fi
+printf 'is_debug=%s\n' "$is_debug" > "$EVIDENCE_DIR/build-mode.txt"
+buildtools/linux64/gn gen out/Validation --args="is_debug=$is_debug is_component_build=true symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_remoteexec=false use_siso=true" \
   2>&1 | tee "$EVIDENCE_DIR/gn.log"
 cp out/Validation/args.gn "$EVIDENCE_DIR/args.gn"
 case "$suite" in
