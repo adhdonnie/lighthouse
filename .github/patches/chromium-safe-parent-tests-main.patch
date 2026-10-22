@@ -8,7 +8,7 @@
  #include <memory>
  
  #include "base/auto_reset.h"
-@@ -8409,6 +8410,285 @@
+@@ -8409,6 +8410,291 @@
  };
  SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostTestPresentationTime);
  
@@ -114,7 +114,13 @@
 +      }
 +    }
 +    if (CanIssueFrame()) {
-+      RequestRedraw();
++      // FinishImplFrame invokes this hook inside a scheduled action. Request
++      // the next redraw after that action returns so the scheduler can
++      // subscribe to BeginFrames again after an aborted draw.
++      ImplThreadTaskRunner()->PostTask(
++          FROM_HERE,
++          base::BindOnce(&LayerTreeHostTestSameSizeSurfaceBase::RequestRedraw,
++                         base::Unretained(this)));
 +    }
 +  }
 +
