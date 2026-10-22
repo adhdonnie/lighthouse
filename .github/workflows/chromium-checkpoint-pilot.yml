@@ -4,6 +4,10 @@ on:
     branches: [codex/chromium-parent-surface-fix]
     paths: [.github/workflows/chromium-checkpoint-pilot.yml]
   workflow_dispatch:
+env:
+  LC_ALL: C.UTF-8
+  LANG: C.UTF-8
+  TZ: UTC
 permissions:
   contents: read
 concurrency:
