@@ -2,6 +2,7 @@ name: Chromium exact-source checkpoint pilot
 on:
   workflow_dispatch:
 env:
+  PYTHONDONTWRITEBYTECODE: '1'
   CHROMIUM_DEPENDENCY_PREFLIGHT: '1'
   LC_ALL: C.UTF-8
   LANG: C.UTF-8
@@ -114,6 +115,7 @@ jobs:
             --src "$CHROMIUM_SRC" --out out/Paired \
             --identity "$EVIDENCE_DIR/checkpoint-identity.json" \
             --checkpoint "$RUNNER_TEMP/chromium-checkpoint" \
+            --mismatch-report "$EVIDENCE_DIR/restore-mismatch.json" \
             2>&1 | tee "$EVIDENCE_DIR/restore.log"
       - name: Same real object must require zero executed actions
         timeout-minutes: 5

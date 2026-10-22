@@ -129,7 +129,7 @@ def main():
     versions['python'] = py
     result = {'schema':1,'osRelease':Path('/etc/os-release').read_text(),
               'architecture':platform.machine(),
-              'buildEnvironment':{n:os.environ.get(n,'') for n in ['CPATH','C_INCLUDE_PATH','CPLUS_INCLUDE_PATH','LIBRARY_PATH','LD_LIBRARY_PATH','LD_PRELOAD','PYTHONPATH','PYTHONHOME','CC','CXX','AR','LD','CFLAGS','CXXFLAGS','RUSTFLAGS']},
+              'buildEnvironment':{n:os.environ.get(n,'') for n in ['CPATH','C_INCLUDE_PATH','CPLUS_INCLUDE_PATH','LIBRARY_PATH','LD_LIBRARY_PATH','LD_PRELOAD','PYTHONPATH','PYTHONHOME','PYTHONDONTWRITEBYTECODE','CC','CXX','AR','LD','CFLAGS','CXXFLAGS','RUSTFLAGS']},
               'locale':{'LANG':'C.UTF-8','LC_ALL':'C.UTF-8','TZ':'UTC'},
               'tools':{n:{'path':str(f),'resolved':str(f.resolve())} for n,f in sorted(tools.items())},
               'versions':versions,'nativeFiles':dict(sorted(measured.items())),

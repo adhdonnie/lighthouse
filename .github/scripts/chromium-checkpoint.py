@@ -55,7 +55,7 @@ def scan(root, output=False):
     return result
 
 
-def same_content(expected, actual):
+def same_content(expected, actual, report=None):
     def stable(rows):
         return {k: {a: b for a, b in v.items() if a != 'mtime_ns'}
                 for k, v in rows.items()}
@@ -66,6 +66,11 @@ def same_content(expected, actual):
             b = {x: y for x, y in actual.get(k, {}).items() if x != 'mtime_ns'}
             if a != b:
                 keys.append(k)
+        if report:
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(json.dumps({'mismatchCount': len(keys),
+                'first1000': {k: {'expected': expected.get(k), 'actual': actual.get(k)}
+                              for k in keys[:1000]}}, indent=2))
         raise ValueError(f'Checkpoint content mismatch: {keys[:30]} ({len(keys)} paths)')
 
 
@@ -82,6 +87,7 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--identity', type=Path, required=True)
     ap.add_argument('--checkpoint', type=Path, required=True)
+    ap.add_argument('--mismatch-report', type=Path)
     args = ap.parse_args()
     src = args.src.resolve()
     out = Path(args.out)
@@ -149,7 +155,7 @@ def main():
         assert rows['identity'] == identity, 'Identity mismatch'
         assert rows['absoluteSource'] == str(src), 'Absolute checkout path changed'
         assert rows['out'] == str(out), 'Output path changed'
-        same_content(rows['source'], scan(src))
+        same_content(rows['source'], scan(src), args.mismatch_report)
         if shutil.disk_usage(src).free < header['outputBytes'] + 5 * 1024**3:
             raise ValueError('Insufficient restore disk space')
         # Archive is from a same-key trusted workflow. Check the full path list
@@ -172,7 +178,7 @@ def main():
             if dec.poll() is None:
                 dec.kill()
                 dec.wait()
-        same_content(rows['outputs'], scan(src / out, True))
+        same_content(rows['outputs'], scan(src / out, True), args.mismatch_report)
         stamps(src, rows['source'])
         stamps(src / out, rows['outputs'])
         print(json.dumps({'status': 'restored-content-and-exact-mtimes', **header}))

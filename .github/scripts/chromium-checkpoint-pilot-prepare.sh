@@ -2,6 +2,8 @@
 # Shared by both independent Linux jobs; prepare identical runtime inputs.
 set -euo pipefail
 : "${CHROMIUM_SRC:?}" "${EVIDENCE_DIR:?}" "${GITHUB_WORKSPACE:?}"
+test "${PYTHONDONTWRITEBYTECODE:-}" = 1
+"$DEPOT_TOOLS_DIR/python-bin/python3" -c 'import sys; assert sys.dont_write_bytecode'
 cd "$CHROMIUM_SRC"
 test "$(git rev-parse HEAD)" = 0e66b94549a8bd85f03fbdf189b752d6e7b63c32
 git diff --exit-code
