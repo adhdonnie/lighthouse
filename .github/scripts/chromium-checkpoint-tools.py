@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize six managed tool links without changing their payload bytes.
+"""Materialize managed tool links without changing their payload bytes.
 
 CIPD assigns private numeric storage slots in arrival order. Keep those slots
 untouched; snapshot the logical tool paths as regular files before GN/build.
@@ -22,11 +22,17 @@ def materialize(src, report):
     assert subprocess.check_output(['git', '-C', str(depot), 'rev-parse', 'HEAD'], text=True).strip() == PIN
     root = depot / '.cipd_bin'
     storage = (root / '.cipd').resolve(strict=True)
+    assert root.resolve() in storage.parents
     provenance = {}
     files = {}
-    for tool in ['crowbar', 'git-credential-luci', 'luci-auth']:
-        for relative in [tool, '.versions/' + tool + '.cipd_version']:
-            path = root / relative
+    # The private slot allocation can vary for any installed package. Discover
+    # the complete shallow tool/version link set rather than a failing subset.
+    groups = [sorted(p for p in root.iterdir() if p.is_symlink()),
+              sorted(p for p in (root / '.versions').iterdir() if p.is_symlink())]
+    assert groups[0] and groups[1], 'Expected pinned CIPD tools and instance records'
+    for paths in groups:
+        for path in paths:
+            relative = path.relative_to(root).as_posix()
             assert path.is_symlink(), f'Expected fresh managed link: {path}'
             target = path.resolve(strict=True)
             assert storage in target.parents and target.is_file(), f'Unexpected target: {target}'
