@@ -57,5 +57,13 @@ else
   sudo ./build/install-build-deps.sh --no-prompt --no-arm \
     2>&1 | tee "$EVIDENCE_DIR/dependencies.log"
 fi
+if [[ "${CHROMIUM_DEPENDENCY_PREFLIGHT:-0}" = 1 ]]; then
+  # The pinned hook writes a wall-clock timestamp only when absent. Updaters
+  # check presence alone. Generate stable content before that hook runs.
+  test "$(git -C third_party/depot_tools rev-parse HEAD)" = dca727ba1f8fa8f1e3b12a815d065818bb61d395
+  test ! -e third_party/depot_tools/.disable_auto_update
+  test ! -L third_party/depot_tools/.disable_auto_update
+  printf 'Disabled for pinned Chromium checkpoint validation.\n' > third_party/depot_tools/.disable_auto_update
+fi
 gclient runhooks 2>&1 | tee "$EVIDENCE_DIR/hooks.log"
 df -h / > "$EVIDENCE_DIR/disk-after-sync.txt"
