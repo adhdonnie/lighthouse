@@ -8,7 +8,7 @@ on:
       stage:
         type: choice
         default: simulation
-        options: [simulation, install-packages]
+        options: [simulation, install-packages, install-after-cleanup]
         description: Package diagnostic stage on disposable hosted runners
 permissions:
   contents: read
@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(inputs.stage == 'install-packages' && '["normalized"]' || '["native","normalized"]') }}
+        environment: ${{ fromJSON(inputs.stage != 'simulation' && '["normalized"]' || '["native","normalized"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -39,10 +39,11 @@ jobs:
         timeout-minutes: 22
         shell: bash
         run: |
-          python3 .github/scripts/chromium-apt-resolver-probe.py \
+          /usr/bin/python3 .github/scripts/chromium-apt-resolver-probe.py \
             --case '${{ matrix.environment }}' \
             --out "$RUNNER_TEMP/apt-resolver-evidence" \
-            ${{ inputs.stage == 'install-packages' && '--install-packages' || '' }}
+            ${{ inputs.stage != 'simulation' && '--install-packages' || '' }} \
+            ${{ inputs.stage == 'install-after-cleanup' && '--bootstrap-layout' || '' }}
       - name: Preserve all evidence including timeout and resolver state
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

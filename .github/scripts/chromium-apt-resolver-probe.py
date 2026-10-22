@@ -37,6 +37,8 @@ def main():
     parser.add_argument('--packages-only', action='store_true')
     parser.add_argument('--install-packages', action='store_true',
                         help='Run exact package installation on a disposable hosted VM')
+    parser.add_argument('--bootstrap-layout', action='store_true',
+                        help='Apply exact disposable-runner cleanup and swap preparation first')
     a = parser.parse_args()
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -98,6 +100,22 @@ def main():
              'elapsedSeconds':time.monotonic()-start,'bytes':counts,
              'truncated':{k:v>LIMIT for k,v in counts.items()}}
         (out/(label+'.json')).write_text(json.dumps(row,indent=2));return row
+
+    if a.bootstrap_layout:
+        assert a.install_packages and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+        # Execute the existing bootstrap's exact preparation block, including
+        # space cleanup and swap, before probing package state. No source sync.
+        bootstrap = Path(__file__).with_name('chromium-validation-bootstrap.sh').read_text()
+        start = bootstrap.index('# These SDK directories')
+        end = bootstrap.index('git clone ', start)
+        preparation = bootstrap[start:end]
+        (out/'bootstrap-preparation.sh').write_text(preparation)
+        layout_env = dict(parent, EVIDENCE_DIR=str(out))
+        prepared = bounded('bootstrap-preparation',
+            ['/bin/bash','-euo','pipefail','-c',preparation],layout_env,300)
+        if prepared['timedOut'] or prepared['exitCode']:
+            (out/'summary.json').write_text(json.dumps({'phase':'bootstrap-preparation','result':prepared},indent=2))
+            return 1
 
     url=f'https://chromium.googlesource.com/chromium/src/+/{REV}/build/install-build-deps.py?format=TEXT'
     data=base64.b64decode(urllib.request.urlopen(url,timeout=60).read())
