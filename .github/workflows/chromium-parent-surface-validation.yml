@@ -138,7 +138,7 @@ jobs:
             git apply "$GITHUB_WORKSPACE/.github/patches/$patch"
           done
           git diff --check
-          git cl format --upstream=HEAD --dry-run -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+          git cl format --upstream=HEAD --dry-run --diff -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc
           git diff > "$EVIDENCE_DIR/common-diagnostics.patch"
           git diff --name-only > "$EVIDENCE_DIR/baseline-changed-files.txt"
           test "$(cat "$EVIDENCE_DIR/baseline-changed-files.txt")" = components/viz/service/frame_sinks/compositor_frame_sink_support.cc

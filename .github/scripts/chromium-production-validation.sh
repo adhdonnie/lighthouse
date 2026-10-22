@@ -14,9 +14,10 @@ apply_patch() { local patch; patch=$(resolve_patch "$1"); test -s "$patch"; git 
 format_and_record() {
   local stage=$1
   git diff --check
+  cp .clang-format "$EVIDENCE_DIR/source.clang-format"
   mapfile -d '' paths < <(git diff --name-only -z)
   test "${#paths[@]}" -gt 0
-  git cl format --upstream=HEAD --dry-run -- "${paths[@]}" 2>&1 | tee "$EVIDENCE_DIR/$stage-format.log"
+  git cl format --upstream=HEAD --dry-run --diff -- "${paths[@]}" 2>&1 | tee "$EVIDENCE_DIR/$stage-format.log"
   git diff > "$EVIDENCE_DIR/$stage.patch"
   git status --short > "$EVIDENCE_DIR/$stage-status.txt"
   python3 - "$EVIDENCE_DIR/$stage-source-hashes.json" "${paths[@]}" <<'PY'

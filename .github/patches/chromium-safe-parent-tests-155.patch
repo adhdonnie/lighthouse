@@ -8,7 +8,7 @@
  #include <memory>
  
  #include "base/auto_reset.h"
-@@ -8377,6 +8378,273 @@
+@@ -8377,6 +8378,277 @@
  };
  SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostTestPresentationTime);
  
@@ -112,14 +112,16 @@
 +        return;
 +      }
 +    }
-+    if (CanIssueFrame())
++    if (CanIssueFrame()) {
 +      RequestRedraw();
++    }
 +  }
 +
 +  void OnNeedsBeginFrames(bool needs_begin_frames) override {
 +    needs_begin_frames_ = needs_begin_frames;
-+    if (needs_begin_frames && CanIssueFrame())
++    if (needs_begin_frames && CanIssueFrame()) {
 +      PostBeginFrame();
++    }
 +  }
 +
 +  void AfterTest() override {
@@ -209,8 +211,9 @@
 +  }
 +
 +  void PostBeginFrame() {
-+    if (frame_task_posted_)
++    if (frame_task_posted_) {
 +      return;
++    }
 +    frame_task_posted_ = true;
 +    ImplThreadTaskRunner()->PostTask(
 +        FROM_HERE,
@@ -220,8 +223,9 @@
 +
 +  void IssueBeginFrame() {
 +    frame_task_posted_ = false;
-+    if (!needs_begin_frames_ || !CanIssueFrame())
++    if (!needs_begin_frames_ || !CanIssueFrame()) {
 +      return;
++    }
 +    frame_time_ += viz::BeginFrameArgs::DefaultInterval();
 +    auto args = viz::BeginFrameArgs::Create(
 +        BEGINFRAME_FROM_HERE, viz::BeginFrameArgs::kManualSourceId,
