@@ -25,6 +25,14 @@ sudo swapon /mnt/chromium.swap
 df -h / > "$EVIDENCE_DIR/disk-ready.txt"
 free -h > "$EVIDENCE_DIR/memory-ready.txt"
 test "$(df --output=avail -BG / | tail -1 | tr -dc '0-9')" -ge 100
+# The pilot must resolve and install dependencies successfully on this actual
+# runner before allocating a Chromium checkout. Historical stall cause remains
+# unproven; this observed gate bounds it without blind expensive retries.
+if [[ "${CHROMIUM_DEPENDENCY_PREFLIGHT:-0}" = 1 ]]; then
+  test "$CHROMIUM_REVISION" = 0e66b94549a8bd85f03fbdf189b752d6e7b63c32
+  /usr/bin/python3 "$GITHUB_WORKSPACE/.github/scripts/chromium-apt-resolver-probe.py" \
+    --case normalized --install-packages --out "$EVIDENCE_DIR/dependency-preflight"
+fi
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS_DIR"
 git -C "$DEPOT_TOOLS_DIR" checkout f2ac30836f43e58e4f79a8d969a88057e7704ab2
 export PATH="$DEPOT_TOOLS_DIR:$PATH"
@@ -41,7 +49,13 @@ test "$(git rev-parse HEAD)" = "$CHROMIUM_REVISION"
 git rev-parse HEAD > "$EVIDENCE_DIR/chromium-revision.txt"
 git -C "$DEPOT_TOOLS_DIR" rev-parse HEAD > "$EVIDENCE_DIR/depot-tools-revision.txt"
 cat chrome/VERSION > "$EVIDENCE_DIR/chromium-version.txt"
-sudo ./build/install-build-deps.sh --no-prompt --no-arm \
-  2>&1 | tee "$EVIDENCE_DIR/dependencies.log"
+if [[ "${CHROMIUM_DEPENDENCY_PREFLIGHT:-0}" = 1 ]]; then
+  /usr/bin/python3 "$GITHUB_WORKSPACE/.github/scripts/chromium-apt-resolver-probe.py" \
+    --case normalized --observe-installer "$CHROMIUM_SRC/build/install-build-deps.sh" \
+    --out "$EVIDENCE_DIR/full-dependency-installer"
+else
+  sudo ./build/install-build-deps.sh --no-prompt --no-arm \
+    2>&1 | tee "$EVIDENCE_DIR/dependencies.log"
+fi
 gclient runhooks 2>&1 | tee "$EVIDENCE_DIR/hooks.log"
 df -h / > "$EVIDENCE_DIR/disk-after-sync.txt"

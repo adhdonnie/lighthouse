@@ -39,6 +39,8 @@ def main():
                         help='Run exact package installation on a disposable hosted VM')
     parser.add_argument('--bootstrap-layout', action='store_true',
                         help='Apply exact disposable-runner cleanup and swap preparation first')
+    parser.add_argument('--observe-installer', type=Path,
+                        help='Observe the full original pinned installer after checkout')
     a = parser.parse_args()
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -58,7 +60,7 @@ def main():
         target = out / f'{label}-proc-{int(time.monotonic())}.txt'
         commands = [['ps','-eo','pid,ppid,pgid,stat,pcpu,pmem,etime,wchan:32,args','--forest'],
                     ['free','-h'],['df','-h','/']]
-        if a.install_packages:
+        if a.install_packages or a.observe_installer:
             commands += [['sudo','-n','ss','-tpn'],['sudo','-n','lslocks'],
                          ['sudo','-n','find','/var/cache/apt/archives/partial','-maxdepth','1',
                           '-type','f','-printf','%f %s %T@\n'],
@@ -100,6 +102,17 @@ def main():
              'elapsedSeconds':time.monotonic()-start,'bytes':counts,
              'truncated':{k:v>LIMIT for k,v in counts.items()}}
         (out/(label+'.json')).write_text(json.dumps(row,indent=2));return row
+
+    if a.observe_installer:
+        assert os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+        installer = a.observe_installer.resolve()
+        assert installer.name == 'install-build-deps.sh'
+        assert hashlib.sha256(installer.with_suffix('.py').read_bytes()).hexdigest() == SHA
+        result = bounded('full-installer',
+            ['sudo','-n','timeout','--signal=TERM','--kill-after=10s','900s',
+             str(installer),'--no-prompt','--no-arm'],parent,930)
+        (out/'summary.json').write_text(json.dumps({'phase':'full-installer','result':result},indent=2))
+        return 1 if result['timedOut'] or result['exitCode'] else 0
 
     if a.bootstrap_layout:
         assert a.install_packages and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'

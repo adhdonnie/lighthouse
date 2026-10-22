@@ -28,7 +28,7 @@ def sha(p):
         for b in iter(lambda:f.read(1024**2),b''):h.update(b)
     return h.hexdigest()
 names=['.github/patches/'+x for x in ['chromium-sink-tracing.patch','chromium-undrawn-state-tracing.patch','chromium-frame-timing-state.patch']]
-names+=['.github/scripts/'+x for x in ['chromium-checkpoint.py','checkpoint-pilot.py','chromium-checkpoint-pilot-prepare.sh','chromium-validation-bootstrap.sh','chromium-host-contract.py']]
+names+=['.github/scripts/'+x for x in ['chromium-checkpoint.py','checkpoint-pilot.py','chromium-checkpoint-pilot-prepare.sh','chromium-validation-bootstrap.sh','chromium-host-contract.py','chromium-apt-resolver-probe.py']]
 obj={'chromium':'0e66b94549a8bd85f03fbdf189b752d6e7b63c32',
      'depotTools':subprocess.check_output(['git','-C',os.environ['DEPOT_TOOLS_DIR'],'rev-parse','HEAD'],text=True).strip(),
      'target':os.environ['PILOT_OBJECT'],'out':'out/Paired','gnArgs':os.environ['PILOT_GN_ARGS'],

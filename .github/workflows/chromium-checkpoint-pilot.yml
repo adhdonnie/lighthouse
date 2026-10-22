@@ -2,6 +2,7 @@ name: Chromium exact-source checkpoint pilot
 on:
   workflow_dispatch:
 env:
+  CHROMIUM_DEPENDENCY_PREFLIGHT: '1'
   LC_ALL: C.UTF-8
   LANG: C.UTF-8
   TZ: UTC
