@@ -8,7 +8,7 @@
  #include <memory>
  
  #include "base/auto_reset.h"
-@@ -8409,6 +8410,277 @@
+@@ -8409,6 +8410,285 @@
  };
  SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostTestPresentationTime);
  
@@ -46,7 +46,9 @@
 +  void WillBeginImplFrameOnThread(LayerTreeHostImpl* host_impl,
 +                                  const viz::BeginFrameArgs& args,
 +                                  bool has_damage) override {
-+    host_impl_ = host_impl;
++    if (phase_ != Phase::kDone) {
++      host_impl_ = host_impl;
++    }
 +    if (phase_ == Phase::kPending) {
 +      EXPECT_EQ(initial_surface_id_,
 +                host_impl->active_tree()->local_surface_id_from_parent());
@@ -93,8 +95,7 @@
 +    } else if (phase_ == Phase::kResuming &&
 +               submitted_id == requested_surface_id_) {
 +      ++resumed_submissions_;
-+      phase_ = Phase::kDone;
-+      EndTest();
++      FinishOnImplThread();
 +    }
 +    MaybeFinishControl();
 +  }
@@ -192,7 +193,14 @@
 +      return;
 +    }
 +    EXPECT_GT(pending_submissions_, 0);
++    FinishOnImplThread();
++  }
++
++  void FinishOnImplThread() {
++    // Clear the cached impl pointer before the harness destroys the host.
++    // Keep cleanup on the same sequence as the pointer's readers and writers.
 +    phase_ = Phase::kDone;
++    host_impl_ = nullptr;
 +    EndTest();
 +  }
 +
