@@ -1,0 +1,87 @@
+name: Isolated Lighthouse fix qualification
+on:
+  push:
+    branches: [codex/chromium-parent-surface-fix]
+    paths: ['.github/workflows/lighthouse-isolated-fixes.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regressions:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+        fix: [response-ownership, painted-document-events, console-violations]
+        include:
+          - fix: response-ownership
+            revision: c439090941db1621c33918b8ca5afeeae16162e0
+            test: core/test/lib/network-recorder-test.js
+            minimum: 23
+          - fix: painted-document-events
+            revision: 93ed9ea2fc5ff92010a95ec7cdc9fc5a124482f3
+            test: core/test/lib/tracehouse/trace-processor-test.js
+            minimum: 70
+          - fix: console-violations
+            revision: 8fb3e9a31274bb7d7cf07339866a591aee58976f
+            test: core/test/gather/gatherers/console-messages-test.js
+            minimum: 8
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ matrix.revision }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19'
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --frozen-lockfile
+      - name: Install pinned Chrome for browser regression
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import {install, Browser} from '@puppeteer/browsers';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const installed = await install({browser: Browser.CHROME,
+            buildId: '155.0.8059.84', cacheDir: path.resolve('.tmp/qualification-chrome')});
+          fs.appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${installed.executablePath}\n`);
+          JS
+      - name: Allow browser sandbox on disposable Ubuntu runner
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Execute regression suite without retries
+        shell: bash
+        env:
+          TEST_FILE: ${{ matrix.test }}
+          MINIMUM: ${{ matrix.minimum }}
+        run: |
+          set -o pipefail
+          mkdir -p .tmp/isolated-qualification
+          git rev-parse HEAD > .tmp/isolated-qualification/revision.txt
+          yarn mocha "$TEST_FILE" --retries=0 2>&1 | tee .tmp/isolated-qualification/tests.log
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const log = fs.readFileSync('.tmp/isolated-qualification/tests.log', 'utf8');
+          const count = log.match(/\b(\d+) passing\b/);
+          if (!count || Number(count[1]) < Number(process.env.MINIMUM) || /\b\d+ pending\b/.test(log)) {
+            throw new Error('Expected regression suite did not run completely');
+          }
+          JS
+      - name: Check types and lint for each isolated fix
+        if: runner.os == 'Linux'
+        run: |
+          yarn type-check
+          yarn lint --quiet
+      - name: Preserve results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: isolated-${{ matrix.fix }}-${{ matrix.os }}
+          path: .tmp/isolated-qualification/
+          retention-days: 14
