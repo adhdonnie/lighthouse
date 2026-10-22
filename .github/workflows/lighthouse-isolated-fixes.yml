@@ -64,12 +64,14 @@ jobs:
           set -o pipefail
           mkdir -p .tmp/isolated-qualification
           git rev-parse HEAD > .tmp/isolated-qualification/revision.txt
-          yarn mocha "$TEST_FILE" --retries=0 2>&1 | tee .tmp/isolated-qualification/tests.log
+          # The runner filters native paths; basenames match on Windows too.
+          yarn mocha "${TEST_FILE##*/}" --retries=0 2>&1 | tee .tmp/isolated-qualification/tests.log
           node --input-type=module <<'JS'
           import fs from 'node:fs';
           const log = fs.readFileSync('.tmp/isolated-qualification/tests.log', 'utf8');
           const count = log.match(/\b(\d+) passing\b/);
-          if (!count || Number(count[1]) < Number(process.env.MINIMUM) || /\b\d+ pending\b/.test(log)) {
+          if (!/^running 1 test files$/m.test(log) || !count ||
+              Number(count[1]) < Number(process.env.MINIMUM) || /\b\d+ pending\b/.test(log)) {
             throw new Error('Expected regression suite did not run completely');
           }
           JS
