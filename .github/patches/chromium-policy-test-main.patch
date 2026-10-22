@@ -1,0 +1,121 @@
+--- a/content/browser/renderer_host/render_frame_host_impl_browsertest.cc
++++ b/content/browser/renderer_host/render_frame_host_impl_browsertest.cc
+@@ -36,6 +36,7 @@
+ #include "build/build_config.h"
+ #include "components/input/timeout_monitor.h"
+ #include "components/viz/common/features.h"
++#include "components/viz/common/surfaces/surface_range.h"
+ #include "content/browser/back_forward_cache/back_forward_cache_impl.h"
+ #include "content/browser/bad_message.h"
+ #include "content/browser/browser_main_loop.h"
+@@ -10041,6 +10042,110 @@
+ 
+ }  // namespace
+ 
++// A same-RFH navigation without paint holding must exclude the old surface
++// while the new document is waiting for a render-blocking stylesheet.
++#if !BUILDFLAG(IS_ANDROID)
++class SameRFHNoPaintHoldingBrowserTest : public RenderFrameHostImplBrowserTest {
++ public:
++  SameRFHNoPaintHoldingBrowserTest() {
++    scoped_features_.InitWithFeatures({}, {features::kRenderDocument});
++    EnablePixelOutput();
++  }
++
++ protected:
++  void SetUpCommandLine(base::CommandLine* command_line) override {
++    RenderFrameHostImplBrowserTest::SetUpCommandLine(command_line);
++    command_line->AppendSwitch(switches::kDisableSiteIsolation);
++  }
++
++  void SetUpOnMainThread() override {
++    document_response_ =
++        std::make_unique<net::test_server::ControllableHttpResponse>(
++            embedded_test_server(), "/blocked-paint-document");
++    stylesheet_response_ =
++        std::make_unique<net::test_server::ControllableHttpResponse>(
++            embedded_test_server(), "/blocked-paint-style.css");
++    RenderFrameHostImplBrowserTest::SetUpOnMainThread();
++  }
++
++  std::unique_ptr<net::test_server::ControllableHttpResponse>
++      document_response_;
++  std::unique_ptr<net::test_server::ControllableHttpResponse>
++      stylesheet_response_;
++
++ private:
++  base::test::ScopedFeatureList scoped_features_;
++};
++
++IN_PROC_BROWSER_TEST_F(SameRFHNoPaintHoldingBrowserTest,
++                       ExcludesOldSurfaceWhileNewDocumentPaintIsBlocked) {
++  const GURL old_url = embedded_test_server()->GetURL("a.com", "/title1.html");
++  const GURL new_url =
++      embedded_test_server()->GetURL("sub.a.com", "/blocked-paint-document");
++  ASSERT_TRUE(NavigateToURL(shell(), old_url));
++  RenderFrameHostImpl* rfh = web_contents()->GetPrimaryMainFrame();
++  ASSERT_FALSE(rfh->ShouldChangeRenderFrameHostOnSameSiteNavigation());
++  DisableProactiveBrowsingInstanceSwapFor(rfh);
++
++  RenderFrameSubmissionObserver old_submission(rfh);
++  ASSERT_TRUE(ExecJs(rfh, "document.body.style.background = 'red';",
++                     EXECUTE_SCRIPT_NO_USER_GESTURE));
++  old_submission.WaitForAnyFrameSubmission();
++  WaitForCopyableViewInWebContents(web_contents());
++  ASSERT_FALSE(rfh->HasStickyUserActivation());
++  const viz::SurfaceId old_surface =
++      GetCurrentSurfaceIdOnDelegatedFrameHost(rfh->GetView());
++  ASSERT_TRUE(old_surface.is_valid());
++  RenderWidgetHostImpl* rwhi = rfh->GetRenderWidgetHost();
++  ASSERT_FALSE(rwhi->IsContentRenderingTimeoutRunning());
++  // A missing immediate clear must not pass because a wall-clock timer expired.
++  rwhi->SetNewContentRenderingTimeoutForTesting(base::TimeDelta::Max());
++
++  TestNavigationObserver navigation(web_contents());
++  ASSERT_TRUE(ExecJs(rfh, JsReplace("location.href = $1;", new_url),
++                     EXECUTE_SCRIPT_NO_USER_GESTURE));
++  document_response_->WaitForRequest();
++  document_response_->Send(
++      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
++      "<!doctype html><link rel=stylesheet href=/blocked-paint-style.css>"
++      "<body>new document</body>");
++  document_response_->Done();
++  stylesheet_response_->WaitForRequest();
++  navigation.WaitForNavigationFinished();
++  ASSERT_EQ(rfh, web_contents()->GetPrimaryMainFrame());
++  ASSERT_EQ(new_url, web_contents()->GetLastCommittedURL());
++
++  // The policy posts the immediate-clear task before completing the navigation
++  // callback. A same-sequence barrier observes it without sleeping or manually
++  // invoking the clear method under test.
++  base::RunLoop clear_barrier;
++  GetUIThreadTaskRunner({})->PostTask(FROM_HERE, clear_barrier.QuitClosure());
++  clear_barrier.Run();
++  EXPECT_FALSE(rwhi->IsContentRenderingTimeoutRunning());
++
++  const viz::SurfaceId first_new_surface =
++      GetFirstSurfaceIdAfterNavigation(rfh->GetView());
++  ASSERT_TRUE(first_new_surface.is_valid());
++  ASSERT_NE(old_surface, first_new_surface);
++  auto* dfh = GetDelegatedFrameHost(rfh->GetView());
++  const viz::SurfaceId fallback = dfh->GetFallbackSurfaceIdForTesting();
++  ASSERT_EQ(first_new_surface, fallback);
++  const viz::SurfaceRange range(fallback, dfh->GetCurrentSurfaceId());
++  EXPECT_FALSE(range.IsInRangeInclusive(old_surface));
++
++  // Releasing the render-blocking resource must allow the new surface to
++  // produce a frame. The parent-surface gate must not deadlock new rendering.
++  RenderFrameSubmissionObserver new_submission(rfh);
++  stylesheet_response_->Send(
++      "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\n\r\n"
++      "body { background: blue; }");
++  stylesheet_response_->Done();
++  new_submission.WaitForAnyFrameSubmission();
++  EXPECT_TRUE(WaitForLoadStop(web_contents()));
++  EXPECT_TRUE(dfh->GetCurrentSurfaceId().IsSameOrNewerThan(first_new_surface));
++}
++#endif  // !BUILDFLAG(IS_ANDROID)
++
+ // https://crbug.com/1415340: For a page with ViewTransition being restored from
+ // BFCache, we explicitly set its fallback surface to the current View to avoid
+ // visual glitches.

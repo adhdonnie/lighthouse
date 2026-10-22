@@ -1,0 +1,220 @@
+name: Chromium parent-surface production validation
+on:
+  push:
+    branches: [codex/chromium-parent-surface-fix]
+    paths: [.github/workflows/chromium-parent-surface-validation.yml]
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Select deterministic tests, paired runtime capture, or all validation
+        type: choice
+        options: [all, cc, viz, policy, runtime]
+        default: all
+      revision:
+        description: Exact source revision family
+        type: choice
+        options: [both, '155', main]
+        default: both
+permissions:
+  contents: read
+concurrency:
+  group: chromium-production-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.revision }}
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_tests: ${{ steps.matrix.outputs.has_tests }}
+    steps:
+      - id: matrix
+        env:
+          SUITE: ${{ inputs.suite || 'runtime' }}
+          REVISION: ${{ inputs.revision || 'both' }}
+        run: |
+          python3 - <<'PY'
+          import json,os
+          suite=os.environ['SUITE'];revision=os.environ['REVISION']
+          assert suite in ['all','cc','viz','policy','runtime']
+          assert revision in ['both','155','main']
+          pins={'155':'0e66b94549a8bd85f03fbdf189b752d6e7b63c32',
+                'main':'9bced7d4b04bec1fc6fa2687583c3bc88dd6de01'}
+          suites=['cc','viz','policy']if suite=='all'else([]if suite=='runtime'else[suite])
+          bases=list(pins)if revision=='both'else[revision]
+          rows=[{'suite':s,'base':b,'revision':pins[b]}for s in suites for b in bases]
+          with open(os.environ['GITHUB_OUTPUT'],'a')as f:
+              f.write('matrix='+json.dumps({'include':rows})+'\n')
+              f.write('has_tests='+str(bool(rows)).lower()+'\n')
+          PY
+  validate:
+    needs: plan
+    if: needs.plan.outputs.has_tests == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.suite }} (${{ matrix.base }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      DEPOT_TOOLS_UPDATE: '0'
+      CHROMIUM_REVISION: ${{ matrix.revision }}
+      CHROMIUM_SUITE: ${{ matrix.suite }}
+      EVIDENCE_DIR: ${{ github.workspace }}/.tmp/chromium-production-${{ matrix.base }}-${{ matrix.suite }}
+      CC_TEST_PATCH: .github/patches/chromium-safe-parent-tests-${{ matrix.base }}.patch
+      CC_FIX_PATCH: .github/patches/chromium-safe-parent-fix-${{ matrix.base }}.patch
+      POLICY_TEST_PATCH: .github/patches/chromium-policy-test-${{ matrix.base }}.patch
+      POLICY_NEGATIVE_PATCH: .github/patches/chromium-policy-no-clear-${{ matrix.base }}.patch
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check required package files before allocating build space
+        shell: bash
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          test -s "$CC_FIX_PATCH"
+          case "$CHROMIUM_SUITE" in
+            cc) test -s "$CC_TEST_PATCH";;
+            policy) test -s "$POLICY_TEST_PATCH"; test -s "$POLICY_NEGATIVE_PATCH";;
+          esac
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          names=['CC_TEST_PATCH','CC_FIX_PATCH','POLICY_TEST_PATCH','POLICY_NEGATIVE_PATCH']
+          files=[os.environ[k]for k in names if pathlib.Path(os.environ[k]).is_file()]
+          files+=list(map(str,pathlib.Path('.github/scripts').glob('chromium-*validation*')))
+          files+=['.github/workflows/chromium-parent-surface-validation.yml']
+          obj={'workflowGitSha':os.environ['GITHUB_SHA'],'chromiumRevision':os.environ['CHROMIUM_REVISION'],
+               'suite':os.environ['CHROMIUM_SUITE'],'runnerImage':os.environ.get('ImageVersion'),
+               'files':[{'file':f,'sha256':hashlib.sha256(pathlib.Path(f).read_bytes()).hexdigest()}for f in sorted(set(files))]}
+          pathlib.Path(os.environ['EVIDENCE_DIR'],'input-manifest.json').write_text(json.dumps(obj,indent=2))
+          PY
+      - name: Bootstrap fresh pinned Chromium checkout
+        timeout-minutes: 85
+        shell: bash
+        run: bash .github/scripts/chromium-validation-bootstrap.sh
+      - name: Compile and prove the selected deterministic suite
+        timeout-minutes: 330
+        shell: bash
+        run: bash .github/scripts/chromium-production-validation.sh "$CHROMIUM_SUITE"
+      - name: Preserve compiler, formatter, expected-failure and fixed evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Chromium-production-${{ matrix.base }}-${{ matrix.suite }}
+          path: ${{ env.EVIDENCE_DIR }}
+          retention-days: 7
+          if-no-files-found: error
+
+  runtime:
+    if: github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'runtime')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CHROMIUM_REVISION: '0e66b94549a8bd85f03fbdf189b752d6e7b63c32'
+      CHROMIUM_VERSION: '155.0.8059.85'
+      DEPOT_TOOLS_UPDATE: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Bootstrap complete pinned source and toolchain
+        timeout-minutes: 80
+        shell: bash
+        run: |
+          set -euo pipefail
+          export EVIDENCE_DIR="$GITHUB_WORKSPACE/.tmp/paired-runtime-evidence"
+          echo "EVIDENCE_DIR=$EVIDENCE_DIR" >> "$GITHUB_ENV"
+          bash .github/scripts/chromium-validation-bootstrap.sh
+      - name: Apply identical diagnostics and generate full Chrome build
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CHROMIUM_SRC"
+          test "$(git rev-parse HEAD)" = "$CHROMIUM_REVISION"
+          git diff --exit-code
+          for patch in chromium-sink-tracing.patch chromium-undrawn-state-tracing.patch chromium-frame-timing-state.patch; do
+            git apply --check "$GITHUB_WORKSPACE/.github/patches/$patch"
+            git apply "$GITHUB_WORKSPACE/.github/patches/$patch"
+          done
+          git diff --check
+          git cl format --upstream=HEAD --dry-run -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+          git diff > "$EVIDENCE_DIR/common-diagnostics.patch"
+          git diff --name-only > "$EVIDENCE_DIR/baseline-changed-files.txt"
+          test "$(cat "$EVIDENCE_DIR/baseline-changed-files.txt")" = components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+          buildtools/linux64/gn gen out/Paired --args='is_debug=false is_component_build=true symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_remoteexec=false use_siso=true'
+          cp out/Paired/args.gn "$EVIDENCE_DIR/args.gn"
+      - name: Build full diagnostics-only Chrome and snapshot its runtime
+        timeout-minutes: 245
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CHROMIUM_SRC"
+          # Cap at240m, dynamically preserving45m of the global345m deadline.
+          bash "$GITHUB_WORKSPACE/.github/scripts/chromium-validation-budget.sh" 14400 2700 \
+            autoninja -C out/Paired -j 4 chrome 2>&1 | tee "$EVIDENCE_DIR/baseline-build.log"
+          out/Paired/chrome --version | tee "$EVIDENCE_DIR/baseline-version.txt"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/chromium-runtime-copy.py" out/Paired "$RUNNER_TEMP/chromium-paired-baseline"
+          cp "$RUNNER_TEMP/chromium-paired-baseline/runtime-manifest.json" "$EVIDENCE_DIR/baseline-runtime-manifest.json"
+          ldd "$RUNNER_TEMP/chromium-paired-baseline/chrome" > "$EVIDENCE_DIR/baseline-linkage.txt"
+          if rg -q 'not found' "$EVIDENCE_DIR/baseline-linkage.txt"; then exit 1; fi
+      - name: Apply only the narrow parent-surface fix and rebuild incrementally
+        timeout-minutes: 65
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$CHROMIUM_SRC"
+          git diff -- cc/trees/layer_tree_host.cc > "$EVIDENCE_DIR/parent-source-before.patch"
+          test ! -s "$EVIDENCE_DIR/parent-source-before.patch"
+          git apply --check "$GITHUB_WORKSPACE/.github/patches/chromium-safe-parent-fix-155.patch"
+          git apply "$GITHUB_WORKSPACE/.github/patches/chromium-safe-parent-fix-155.patch"
+          git diff --check
+          git diff -- cc/trees/layer_tree_host.cc > "$EVIDENCE_DIR/narrow-fix-applied.patch"
+          git diff --name-only > "$EVIDENCE_DIR/fixed-changed-files.txt"
+          python3 - "$EVIDENCE_DIR/fixed-changed-files.txt" <<'PY'
+          import pathlib,sys
+          assert set(pathlib.Path(sys.argv[1]).read_text().splitlines()) == {
+            'cc/trees/layer_tree_host.cc',
+            'components/viz/service/frame_sinks/compositor_frame_sink_support.cc'}
+          PY
+          git diff -- components/viz/service/frame_sinks/compositor_frame_sink_support.cc > "$EVIDENCE_DIR/fixed-diagnostics.patch"
+          cmp "$EVIDENCE_DIR/common-diagnostics.patch" "$EVIDENCE_DIR/fixed-diagnostics.patch"
+          # Cap at60m, dynamically preserving20m for capture/evidence.
+          bash "$GITHUB_WORKSPACE/.github/scripts/chromium-validation-budget.sh" 3600 1200 \
+            autoninja -C out/Paired -j 4 chrome 2>&1 | tee "$EVIDENCE_DIR/fixed-build.log"
+          out/Paired/chrome --version | tee "$EVIDENCE_DIR/fixed-version.txt"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/chromium-runtime-copy.py" out/Paired "$RUNNER_TEMP/chromium-paired-fixed"
+          cp "$RUNNER_TEMP/chromium-paired-fixed/runtime-manifest.json" "$EVIDENCE_DIR/fixed-runtime-manifest.json"
+          ldd "$RUNNER_TEMP/chromium-paired-fixed/chrome" > "$EVIDENCE_DIR/fixed-linkage.txt"
+          if rg -q 'not found' "$EVIDENCE_DIR/fixed-linkage.txt"; then exit 1; fi
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.19'
+      - name: Install locked Lighthouse capture dependencies
+        timeout-minutes: 6
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          yarn install --frozen-lockfile
+          yarn build-report
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Capture paired normal and amplified mobile cases
+        timeout-minutes: 17
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/chromium-validation-budget.sh 900 300 \
+            node .github/scripts/chromium-paired-runtime.mjs "$GITHUB_WORKSPACE" \
+            "$RUNNER_TEMP/chromium-paired-baseline/chrome" \
+            "$RUNNER_TEMP/chromium-paired-fixed/chrome" "$EVIDENCE_DIR/captures" \
+            2>&1 | tee "$EVIDENCE_DIR/runtime-capture.log"
+      - name: Preserve partial build and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Chromium-paired-parent-surface-runtime
+          path: .tmp/paired-runtime-evidence/
+          retention-days: 14

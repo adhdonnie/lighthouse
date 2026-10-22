@@ -1,0 +1,284 @@
+--- a/cc/trees/layer_tree_host_unittest.cc
++++ b/cc/trees/layer_tree_host_unittest.cc
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <atomic>
++#include <map>
+ #include <memory>
+ 
+ #include "base/auto_reset.h"
+@@ -8377,6 +8378,273 @@
+ };
+ SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostTestPresentationTime);
+ 
++// Exercise the viewport entry point while main-frame updates are deferred.
++// A parent surface handoff must suppress obsolete impl-only submissions, but
++// child acknowledgments and unchanged IDs must leave ordinary drawing usable.
++class LayerTreeHostTestSameSizeSurfaceBase
++    : public LayerTreeHostTest,
++      public viz::ExternalBeginFrameSourceClient {
++ protected:
++  enum class Update { kParentSequence, kChildSequence, kUnchanged };
++
++  explicit LayerTreeHostTestSameSizeSurfaceBase(Update update)
++      : LayerTreeHostTest(kDefaultRendererType,
++                          /*disable_trees_in_viz=*/true),
++        update_(update),
++        begin_frame_source_(this) {
++    UseBeginFrameSource(&begin_frame_source_);
++    SetInitialRootBounds(gfx::Size(20, 20));
++  }
++
++  void SetupTree() override {
++    auto root = SolidColorLayer::Create();
++    root->SetBounds(gfx::Size(20, 20));
++    root->SetBackgroundColor(SkColors::kBlue);
++    layer_tree_host()->SetRootLayer(root);
++    LayerTreeHostTest::SetupTree();
++  }
++
++  void BeginTest() override {
++    initial_surface_id_ = GetCurrentLocalSurfaceId();
++    PostSetNeedsCommitToMainThread();
++  }
++
++  void WillBeginImplFrameOnThread(LayerTreeHostImpl* host_impl,
++                                  const viz::BeginFrameArgs& args,
++                                  bool has_damage) override {
++    host_impl_ = host_impl;
++    if (phase_ == Phase::kPending) {
++      EXPECT_EQ(initial_surface_id_,
++                host_impl->active_tree()->local_surface_id_from_parent());
++    }
++  }
++
++  void WillSubmitCompositorFrame(LayerTreeHostImpl* host_impl,
++                                 const viz::CompositorFrame& frame) override {
++    const bool pending = phase_ == Phase::kPending;
++    if (pending) {
++      ++pending_generated_frames_;
++      EXPECT_NE(Update::kParentSequence, update_)
++          << "obsolete surface submitted during parent handoff";
++    }
++    generated_surface_ids_.emplace(
++        frame.metadata.frame_token,
++        GeneratedFrame{host_impl->active_tree()->local_surface_id_from_parent(),
++                       pending});
++  }
++
++  void DisplayReceivedCompositorFrameOnThread(
++      const viz::CompositorFrame& frame) override {
++    auto it = generated_surface_ids_.find(frame.metadata.frame_token);
++    ASSERT_NE(generated_surface_ids_.end(), it);
++    const GeneratedFrame generated_frame = it->second;
++    const viz::LocalSurfaceId submitted_id = generated_frame.surface_id;
++    generated_surface_ids_.erase(it);
++    if (generated_frame.pending) {
++      ++pending_submissions_;
++      EXPECT_EQ(initial_surface_id_, submitted_id);
++      EXPECT_NE(Update::kParentSequence, update_)
++          << "obsolete surface submitted during parent handoff";
++    }
++
++    if (phase_ == Phase::kInitial) {
++      EXPECT_EQ(initial_surface_id_, submitted_id);
++      phase_ = Phase::kConfiguring;
++      MainThreadTaskRunner()->PostTaskAndReply(
++          FROM_HERE,
++          base::BindOnce(&LayerTreeHostTestSameSizeSurfaceBase::ConfigureUpdate,
++                         base::Unretained(this)),
++          base::BindOnce(&LayerTreeHostTestSameSizeSurfaceBase::BeginAttempts,
++                         base::Unretained(this)));
++    } else if (phase_ == Phase::kResuming &&
++               submitted_id == requested_surface_id_) {
++      ++resumed_submissions_;
++      phase_ = Phase::kDone;
++      EndTest();
++    }
++    MaybeFinishControl();
++  }
++
++  void DidFinishImplFrameOnThread(LayerTreeHostImpl* host_impl) override {
++    if (phase_ == Phase::kPending) {
++      if (++redraw_attempts_ == kRedrawAttempts) {
++        phase_ = Phase::kReleasing;
++        MainThreadTaskRunner()->PostTaskAndReply(
++            FROM_HERE,
++            base::BindOnce(&LayerTreeHostTestSameSizeSurfaceBase::ReleaseUpdate,
++                           base::Unretained(this)),
++            base::BindOnce(&LayerTreeHostTestSameSizeSurfaceBase::ResumeDrawing,
++                           base::Unretained(this)));
++        return;
++      }
++    }
++    if (CanIssueFrame())
++      RequestRedraw();
++  }
++
++  void OnNeedsBeginFrames(bool needs_begin_frames) override {
++    needs_begin_frames_ = needs_begin_frames;
++    if (needs_begin_frames && CanIssueFrame())
++      PostBeginFrame();
++  }
++
++  void AfterTest() override {
++    EXPECT_EQ(kRedrawAttempts, redraw_attempts_);
++    EXPECT_EQ(pending_generated_frames_, pending_submissions_);
++    if (update_ == Update::kParentSequence) {
++      EXPECT_EQ(0, pending_generated_frames_);
++      EXPECT_EQ(0, pending_submissions_);
++      EXPECT_EQ(1, resumed_submissions_);
++    } else {
++      EXPECT_GT(pending_submissions_, 0);
++    }
++    EXPECT_FALSE(deferred_update_);
++  }
++
++ private:
++  enum class Phase {
++    kInitial,
++    kConfiguring,
++    kPending,
++    kReleasing,
++    kDraining,
++    kResuming,
++    kDone,
++  };
++  static constexpr int kRedrawAttempts = 5;
++
++  void ConfigureUpdate() {
++    deferred_update_ = layer_tree_host()->DeferMainFrameUpdate();
++    requested_surface_id_ = initial_surface_id_;
++    if (update_ == Update::kParentSequence) {
++      GenerateNewLocalSurfaceId();
++      requested_surface_id_ = GetCurrentLocalSurfaceId();
++    } else if (update_ == Update::kChildSequence) {
++      ASSERT_TRUE(child_allocator_.UpdateFromParent(initial_surface_id_));
++      child_allocator_.GenerateId();
++      requested_surface_id_ = child_allocator_.GetCurrentLocalSurfaceId();
++    }
++    layer_tree_host()->SetViewportRectAndScale(
++        layer_tree_host()->device_viewport_rect(), 1.f, requested_surface_id_);
++  }
++
++  void BeginAttempts() {
++    // ConfigureUpdate posts the target to the impl runner before this reply.
++    // No BeginFrames are issued during configuration, so the first counted
++    // redraw attempt occurs after that target update has been processed.
++    phase_ = Phase::kPending;
++    RequestRedraw();
++  }
++
++  void ReleaseUpdate() { deferred_update_.reset(); }
++
++  void ResumeDrawing() {
++    if (update_ != Update::kParentSequence) {
++      // These updates do not request a new main-frame commit. A child-only
++      // target would therefore strand the old active tree instead of drawing.
++      phase_ = Phase::kDraining;
++      MaybeFinishControl();
++      return;
++    }
++    phase_ = Phase::kResuming;
++    RequestRedraw();
++  }
++
++  void MaybeFinishControl() {
++    if (phase_ != Phase::kDraining ||
++        pending_generated_frames_ != pending_submissions_) {
++      return;
++    }
++    EXPECT_GT(pending_submissions_, 0);
++    phase_ = Phase::kDone;
++    EndTest();
++  }
++
++  bool CanIssueFrame() const {
++    return phase_ == Phase::kInitial || phase_ == Phase::kPending ||
++           phase_ == Phase::kResuming;
++  }
++
++  void RequestRedraw() {
++    if (host_impl_) {
++      host_impl_->SetViewportDamage(gfx::Rect(20, 20));
++      host_impl_->SetNeedsRedraw(/*animation_only=*/true,
++                                 /*skip_if_inside_draw=*/false);
++    }
++    PostBeginFrame();
++  }
++
++  void PostBeginFrame() {
++    if (frame_task_posted_)
++      return;
++    frame_task_posted_ = true;
++    ImplThreadTaskRunner()->PostTask(
++        FROM_HERE,
++        base::BindOnce(&LayerTreeHostTestSameSizeSurfaceBase::IssueBeginFrame,
++                       base::Unretained(this)));
++  }
++
++  void IssueBeginFrame() {
++    frame_task_posted_ = false;
++    if (!needs_begin_frames_ || !CanIssueFrame())
++      return;
++    frame_time_ += viz::BeginFrameArgs::DefaultInterval();
++    auto args = viz::BeginFrameArgs::Create(
++        BEGINFRAME_FROM_HERE, viz::BeginFrameArgs::kManualSourceId,
++        next_frame_number_++, frame_time_,
++        frame_time_ + viz::BeginFrameArgs::DefaultInterval(),
++        viz::BeginFrameArgs::DefaultInterval(), viz::BeginFrameArgs::NORMAL);
++    begin_frame_source_.OnBeginFrame(args);
++  }
++
++  struct GeneratedFrame {
++    viz::LocalSurfaceId surface_id;
++    bool pending;
++  };
++
++  const Update update_;
++  viz::ExternalBeginFrameSource begin_frame_source_;
++  Phase phase_ = Phase::kInitial;
++  bool needs_begin_frames_ = false;
++  bool frame_task_posted_ = false;
++  raw_ptr<LayerTreeHostImpl> host_impl_ = nullptr;
++  base::TimeTicks frame_time_ = base::TimeTicks::Now();
++  uint64_t next_frame_number_ = viz::BeginFrameArgs::kStartingFrameNumber;
++  int redraw_attempts_ = 0;
++  int pending_generated_frames_ = 0;
++  int pending_submissions_ = 0;
++  int resumed_submissions_ = 0;
++  viz::LocalSurfaceId initial_surface_id_;
++  viz::LocalSurfaceId requested_surface_id_;
++  viz::ChildLocalSurfaceIdAllocator child_allocator_;
++  std::unique_ptr<ScopedDeferMainFrameUpdate> deferred_update_;
++  std::map<uint32_t, GeneratedFrame> generated_surface_ids_;
++};
++
++class LayerTreeHostTestSameSizeParentSurfaceBlocksStaleFrames
++    : public LayerTreeHostTestSameSizeSurfaceBase {
++ public:
++  LayerTreeHostTestSameSizeParentSurfaceBlocksStaleFrames()
++      : LayerTreeHostTestSameSizeSurfaceBase(Update::kParentSequence) {}
++};
++MULTI_THREAD_TEST_F(LayerTreeHostTestSameSizeParentSurfaceBlocksStaleFrames);
++
++class LayerTreeHostTestSameSizeChildSurfaceAckKeepsDrawing
++    : public LayerTreeHostTestSameSizeSurfaceBase {
++ public:
++  LayerTreeHostTestSameSizeChildSurfaceAckKeepsDrawing()
++      : LayerTreeHostTestSameSizeSurfaceBase(Update::kChildSequence) {}
++};
++MULTI_THREAD_TEST_F(LayerTreeHostTestSameSizeChildSurfaceAckKeepsDrawing);
++
++class LayerTreeHostTestUnchangedSurfaceKeepsDrawing
++    : public LayerTreeHostTestSameSizeSurfaceBase {
++ public:
++  LayerTreeHostTestUnchangedSurfaceKeepsDrawing()
++      : LayerTreeHostTestSameSizeSurfaceBase(Update::kUnchanged) {}
++};
++MULTI_THREAD_TEST_F(LayerTreeHostTestUnchangedSurfaceKeepsDrawing);
++
+ // Makes sure that viz::LocalSurfaceId is propagated to the LayerTreeFrameSink.
+ class LayerTreeHostTestLocalSurfaceId : public LayerTreeHostTest {
+  protected:

@@ -1,0 +1,27 @@
+--- a/content/browser/renderer_host/render_frame_host_manager.cc
++++ b/content/browser/renderer_host/render_frame_host_manager.cc
+@@ -1089,23 +1089,7 @@
+     // output on prerender activation.
+     rwhi->InitializePaintHolding(!is_prerendering);
+ 
+-    // Force the timer to expire immediately if we don't allow main frame
+-    // paint-holding.
+-    if (!is_prerendering && frame_tree_node_->IsMainFrame() &&
+-        !allow_paint_holding) {
+-      // We post task here, since this evicts a surface but the embedding of a
+-      // new surface would be done in the same stack as this call. The
+-      // ordering of whether the new surface has or has not yet been embedded
+-      // differs for different platforms, and we always want the new surface
+-      // to be embedded before we evict. Hence, we post a task. In practice
+-      // this still disables paint-holding unless this task is delayed for a
+-      // long time.
+-      GetUIThreadTaskRunner({})->PostTask(
+-          FROM_HERE,
+-          base::BindOnce(
+-              &RenderWidgetHostImpl::ForceFirstFrameAfterNavigationTimeout,
+-              rwhi->GetWeakPtr()));
+-    }
++    // Negative validation control only: omit the same-RFH immediate clear.
+   }
+ 
+   // If we are navigating away from a Page that has a form data associated with

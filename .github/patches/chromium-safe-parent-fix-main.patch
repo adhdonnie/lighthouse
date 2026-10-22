@@ -1,0 +1,24 @@
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -1517,11 +1517,18 @@
+     }
+   }
+ 
+-  // If a new viz::LocalSurfaceId has been provided, and the viewport has
+-  // changed, we need not begin new frames until it has activated.
++  // Wait for a new surface to activate after a resize or a parent-initiated
++  // handoff within the same embedding. Impl-only frames for the old surface
++  // may no longer be eligible for display during a same-size navigation.
++  // Child-only sequence updates acknowledge existing renderer state and do
++  // not request the commit needed to satisfy a new target.
+   if (local_surface_id_from_parent.is_valid() &&
+       previous_local_surface_id != local_surface_id_from_parent &&
+-      device_viewport_rect_changed) {
++      (device_viewport_rect_changed ||
++       (AreEmbedTokensEqual(previous_local_surface_id,
++                            local_surface_id_from_parent) &&
++        !AreParentSequencesEqual(previous_local_surface_id,
++                                 local_surface_id_from_parent)))) {
+     SetTargetLocalSurfaceId(local_surface_id_from_parent);
+   }
+ 

@@ -1,0 +1,37 @@
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -1529,6 +1529,14 @@
+   const bool can_throttle_if_unresponsive_or_excessive =
+       frame_time - last_frame_time_ < base::Seconds(1);
+ 
++  bool frame_timing_details_all_failed = true;
++  for (const auto& entry : frame_timing_details_) {
++    if (!entry.second.presentation_feedback.failed()) {
++      frame_timing_details_all_failed = false;
++      break;
++    }
++  }
++
+   bool should_throttle_undrawn_frames = false;
+   if (last_activated_surface_id_.is_valid()) {
+     Surface* surface =
+@@ -1563,15 +1571,10 @@
+         surface->GetActiveFrameMetadata().may_throttle_if_undrawn_frames,
+         "time_since_last_frame_ms",
+         (frame_time - last_frame_time_).InMillisecondsF(),
+-        "should_throttle_undrawn_frames", should_throttle_undrawn_frames);
+-  }
+-
+-  bool frame_timing_details_all_failed = true;
+-  for (const auto& entry : frame_timing_details_) {
+-    if (!entry.second.presentation_feedback.failed()) {
+-      frame_timing_details_all_failed = false;
+-      break;
+-    }
++        "should_throttle_undrawn_frames", should_throttle_undrawn_frames,
++        "frame_timing_details_count",
++        static_cast<uint64_t>(frame_timing_details_.size()),
++        "frame_timing_details_all_failed", frame_timing_details_all_failed);
+   }
+ 
+   // If there are pending timing details from the previous successfully
