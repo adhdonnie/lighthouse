@@ -130,9 +130,10 @@ function schemaSummary(trace) {
   const decisions = events.filter(e => e.name === 'SendBeginFrameDecision');
   const states = events.filter(e => e.name === 'BeginFrameUndrawnState');
   if (diagnosticMode === 'without-added-diagnostics') {
-    assert.equal(decisions.length + states.length, 0,
-      'Confirmation binaries must omit the added diagnostic events');
-    return {addedDiagnosticEvents: 0,
+    assert.equal(states.length, 0, 'Confirmation must omit the added counter event');
+    assert(decisions.every(e => !('frame_sink_client_id' in e.args) &&
+      !('frame_sink_sink_id' in e.args)), 'Confirmation must omit added sink identity fields');
+    return {addedDiagnosticEvents: 0, nativeDecisionEvents: decisions.length,
       limitation: 'Timing confirmation only; no added page-sink counter diagnostics.'};
   }
   assert(decisions.length && states.length, 'Both unchanged diagnostic patches must be active');
