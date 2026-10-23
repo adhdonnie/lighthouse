@@ -179,8 +179,8 @@ subprocess.check_call=traced(subprocess.check_call)
 m.install_packages(m.parse_args(['--no-prompt','--no-arm']))
 """
         result = bounded('install-packages',
-            ['sudo','-n','timeout','--signal=TERM','--kill-after=10s','600s',
-             '/usr/bin/python3','-c',install_code,str(source)], parent, 630)
+            ['sudo','-n','timeout','--signal=TERM','--kill-after=10s','1200s',
+             '/usr/bin/python3','-c',install_code,str(source)], parent, 1230)
         bounded('apt-history',['sudo','-n','tail','-n','150','/var/log/apt/term.log','/var/log/apt/history.log'],parent,30)
         bounded('package-state-after',['dpkg-query','-W','-f','${binary:Package}\t${Version}\t${Architecture}\n'],parent,30)
         (out/'summary.json').write_text(json.dumps({'case':a.case,'phase':'package-install',

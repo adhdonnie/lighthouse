@@ -26,7 +26,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     name: Apt simulation (${{ matrix.environment }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 24
+    timeout-minutes: 32
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Compare exact pinned installer simulation under one explicit environment
-        timeout-minutes: 22
+        timeout-minutes: 30
         shell: bash
         run: |
           /usr/bin/python3 .github/scripts/chromium-apt-resolver-probe.py \
