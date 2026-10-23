@@ -15,6 +15,9 @@ assert(rootArg && baselineArg && fixedArg && outputArg, 'Four explicit paths req
 const root = path.resolve(rootArg);
 const variants = {A: path.resolve(baselineArg), B: path.resolve(fixedArg)};
 const output = path.resolve(outputArg);
+const diagnosticMode = process.env.CHROMIUM_DIAGNOSTIC_MODE || 'instrumented';
+assert(['instrumented', 'without-added-diagnostics'].includes(diagnosticMode),
+  'Unknown diagnostic mode');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const load = relative => import(pathToFileURL(path.join(root, relative)).href);
 const requireFromRoot = createRequire(path.join(root, 'package.json'));
@@ -109,8 +112,9 @@ await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({
   workflowGitSha: process.env.GITHUB_SHA || null,
   chromiumRevision: '0e66b94549a8bd85f03fbdf189b752d6e7b63c32',
   chromiumVersion: '155.0.8059.85', v8RandomSeed: 17148, order: 'ABBAAB',
-  arms: {A: 'diagnostics-only',
-    B: 'identical diagnostics plus narrow parent-surface fix'}, buildIdentities, settings,
+  diagnosticMode,
+  arms: {A: diagnosticMode === 'instrumented' ? 'diagnostics-only' : 'baseline',
+    B: 'same diagnostic mode plus narrow parent-surface fix'}, buildIdentities, settings,
   modes: {normal: {delay: 1, duration: 1}, amplified: {delay: 0.1, duration: 10}},
   fixture: {htmlSha256: hash(html), cssSha256: hash(css), documentDelayMs: 200, cssDelayMs: 100},
   sourceFiles: sourceIdentities,
@@ -125,6 +129,12 @@ function schemaSummary(trace) {
   const events = trace.traceEvents || trace;
   const decisions = events.filter(e => e.name === 'SendBeginFrameDecision');
   const states = events.filter(e => e.name === 'BeginFrameUndrawnState');
+  if (diagnosticMode === 'without-added-diagnostics') {
+    assert.equal(decisions.length + states.length, 0,
+      'Confirmation binaries must omit the added diagnostic events');
+    return {addedDiagnosticEvents: 0,
+      limitation: 'Timing confirmation only; no added page-sink counter diagnostics.'};
+  }
   assert(decisions.length && states.length, 'Both unchanged diagnostic patches must be active');
   const sinks = {};
   for (const {args} of decisions) {
