@@ -1,0 +1,185 @@
+name: Chromium bounded Release build transport
+on:
+  push:
+    branches: [codex/chromium-parent-surface-fix]
+    paths: [.github/workflows/chromium-release-continuation.yml]
+  workflow_dispatch:
+    inputs:
+      previous_cache_key:
+        description: Exact verified prior checkpoint key; empty only for first phase
+        type: string
+        default: ''
+permissions:
+  contents: read
+  actions: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: chromium-bounded-release-baseline
+  cancel-in-progress: false
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  CHROMIUM_DEPENDENCY_PREFLIGHT: '1'
+  LC_ALL: C.UTF-8
+  LANG: C.UTF-8
+  TZ: UTC
+jobs:
+  register:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - run: echo 'Manual bounded build transport registered; no build or qualification executed.'
+  phase:
+    if: github.event_name == 'workflow_dispatch'
+    name: Build checkpoint transport (not fix qualification)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    env:
+      CHROMIUM_REVISION: '0e66b94549a8bd85f03fbdf189b752d6e7b63c32'
+      DEPOT_TOOLS_UPDATE: '0'
+      PREVIOUS_CACHE_KEY: ${{ inputs.previous_cache_key }}
+      EVIDENCE_DIR: ${{ github.workspace }}/.tmp/release-phase-evidence
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check actual Linux process identity before allocating build space
+        timeout-minutes: 3
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          python3 - <<'PY'
+          import os,runpy,signal,subprocess
+          m=runpy.run_path('.github/scripts/chromium-release-phase.py')
+          assert m['processes']()[os.getpid()]['parent']==os.getppid()
+          p=subprocess.Popen(['sleep','30'],start_new_session=True)
+          try:
+              row=m['processes']()[p.pid]
+              assert row['parent']==os.getpid() and row['group']==p.pid
+              os.killpg(p.pid,signal.SIGTERM)
+              p.wait(timeout=5)
+          finally:
+              if p.poll() is None:
+                  os.killpg(p.pid,signal.SIGKILL);p.wait()
+          PY
+          python3 .github/scripts/chromium-release-phase-test.py 2>&1 | tee "$EVIDENCE_DIR/transport-safety-controls.log"
+      - name: Observed fresh pinned bootstrap before any restore
+        timeout-minutes: 50
+        run: bash .github/scripts/chromium-validation-bootstrap.sh
+      - name: Independently prepare exact baseline build identity
+        timeout-minutes: 5
+        run: bash .github/scripts/chromium-release-prepare.sh
+      - name: Restore only the exact prior cache; never silently start over
+        if: inputs.previous_cache_key != ''
+        id: previous
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/chromium-checkpoint
+          key: ${{ inputs.previous_cache_key }}
+          fail-on-cache-miss: true
+      - name: Verify all content and restore exact timestamps
+        if: inputs.previous_cache_key != ''
+        timeout-minutes: 30
+        run: |
+          test '${{ steps.previous.outputs.cache-hit }}' = true
+          python3 .github/scripts/chromium-checkpoint.py restore \
+            --src "$CHROMIUM_SRC" --out out/Paired \
+            --identity "$EVIDENCE_DIR/checkpoint-identity.json" \
+            --checkpoint "$RUNNER_TEMP/chromium-checkpoint" \
+            --mismatch-report "$EVIDENCE_DIR/restore-mismatch.json" \
+            2>&1 | tee "$EVIDENCE_DIR/restore.log"
+      - name: First phase only generates GN and prebuilds the reuse sentinel
+        if: inputs.previous_cache_key == ''
+        timeout-minutes: 12
+        run: |
+          cd "$CHROMIUM_SRC"
+          buildtools/linux64/gn gen out/Paired --args="$PILOT_GN_ARGS" 2>&1 | tee "$EVIDENCE_DIR/gn.log"
+          autoninja -C out/Paired -j 4 "$PILOT_OBJECT" 2>&1 | tee "$EVIDENCE_DIR/sentinel-build.log"
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          p=pathlib.Path(os.environ['CHROMIUM_SRC'])/'out/Paired'/os.environ['PILOT_OBJECT']
+          d={'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size,'mtime_ns':p.stat().st_mtime_ns}
+          pathlib.Path(os.environ['EVIDENCE_DIR'],'initial-object.json').write_text(json.dumps(d,indent=2))
+          PY
+      - name: Resumed sentinel must execute no actions and preserve the object
+        if: inputs.previous_cache_key != ''
+        timeout-minutes: 5
+        run: |
+          cd "$CHROMIUM_SRC"
+          autoninja -C out/Paired -j 4 "$PILOT_OBJECT" 2>&1 | tee "$EVIDENCE_DIR/sentinel-noop.log"
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,re
+          ev=pathlib.Path(os.environ['EVIDENCE_DIR']);s=(ev/'sentinel-noop.log').read_text()
+          assert re.search(r'Build Succeeded:\s+0 steps',s)
+          assert 'Regenerating ninja files' not in s
+          assert not re.search(r'\[\d+/\d+\]\s+\S+\s+[SF]\s+',s)
+          p=pathlib.Path(os.environ['CHROMIUM_SRC'])/'out/Paired'/os.environ['PILOT_OBJECT']
+          actual={'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size,'mtime_ns':p.stat().st_mtime_ns}
+          expected=json.loads(pathlib.Path(os.environ['RUNNER_TEMP'],'chromium-checkpoint/initial-object.json').read_text())
+          assert actual==expected
+          (ev/'initial-object.json').write_text(json.dumps(actual,indent=2))
+          PY
+      - name: Build one bounded phase and prove all owned processes stopped
+        id: build
+        timeout-minutes: 125
+        run: python3 .github/scripts/chromium-release-phase.py
+      - name: Seal complete stopped graph within the transport cap
+        timeout-minutes: 60
+        run: |
+          python3 .github/scripts/chromium-checkpoint.py seal \
+            --src "$CHROMIUM_SRC" --out out/Paired \
+            --identity "$EVIDENCE_DIR/checkpoint-identity.json" \
+            --checkpoint "$RUNNER_TEMP/chromium-checkpoint"
+          cp "$EVIDENCE_DIR/initial-object.json" "$RUNNER_TEMP/chromium-checkpoint/initial-object.json"
+          cp "$EVIDENCE_DIR/phase-result.json" "$RUNNER_TEMP/chromium-checkpoint/phase-result.json"
+          cp "$RUNNER_TEMP/chromium-checkpoint/READY.json" "$EVIDENCE_DIR/checkpoint-size-and-hashes.json"
+          # Leave16MiB for the cache transport wrapper below the8GiB ceiling.
+          test "$(du -sb "$RUNNER_TEMP/chromium-checkpoint" | cut -f1)" -lt 8573157376
+      - name: Save immutable checkpoint using default included cache only
+        id: saved
+        timeout-minutes: 30
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/chromium-checkpoint
+          key: ${{ env.CHECKPOINT_SAVE_KEY }}
+      - name: Confirm exact key really exists before declaring continuation available
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib,time,urllib.parse,urllib.request
+          key=os.environ['CHECKPOINT_SAVE_KEY']
+          q=urllib.parse.urlencode({'key':key,'ref':os.environ['GITHUB_REF']})
+          url='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/actions/caches?'+q
+          for attempt in range(6):
+              req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(req,timeout=15)as r:d=json.load(r)
+              exact=[x for x in d['actions_caches']if x['key']==key]
+              if exact:break
+              time.sleep(5)
+          assert len(exact)==1,'Immutable cache save was not confirmed; do not advance'
+          assert exact[0]['size_in_bytes'] <= 8589934592,'Cache transport exceeded8GiB'
+          ev=pathlib.Path(os.environ['EVIDENCE_DIR'])
+          result=json.loads((ev/'phase-result.json').read_text())
+          receipt={'cache':exact[0],'sourceCommit':os.environ['GITHUB_SHA'],
+                   'ready':json.loads((ev/'checkpoint-size-and-hashes.json').read_text()),'build':result,
+                   'fixQualified':False,'runtimeQualified':False}
+          (ev/'confirmed-checkpoint-receipt.json').write_text(json.dumps(receipt,indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a')as f:
+              f.write('Build transport only: '+result['status']+'. Fix/runtime qualification remains incomplete.\n')
+          PY
+      - name: Preserve small evidence including failures, never build objects
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Chromium-release-phase-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}
+          retention-days: 7
+          if-no-files-found: error
+      - name: Report unfinished build explicitly instead of green qualification
+        if: steps.build.outputs.status == 'incomplete-build-progress'
+        run: |
+          echo 'INCOMPLETE build progress; a confirmed checkpoint is available, not a passing validation.'
+          exit 1
