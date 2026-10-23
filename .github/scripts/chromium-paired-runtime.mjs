@@ -23,19 +23,39 @@ const {default: lighthouse} = await load('core/index.js');
 const {launch} = await load('node_modules/chrome-launcher/dist/index.js');
 const {DEFAULT_FLAGS} = await load('node_modules/chrome-launcher/dist/flags.js');
 const {ProtocolSession} = await load('core/gather/session.js');
+const {Driver} = await load('core/gather/driver.js');
 const originalSend = ProtocolSession.prototype.sendCommand;
+const originalDisconnect = Driver.prototype.disconnect;
 assert(DEFAULT_FLAGS.some(flag => flag.startsWith('--disable-features=') &&
   flag.split('=')[1].split(',').includes('RenderDocument')),
 'Require frozen RenderDocument-off setup');
 assert(!DEFAULT_FLAGS.some(flag => flag.includes('LimitCrossOriginNonActivatedPaintHolding')),
   'Do not override the paint-holding security policy');
 let commands = [];
+let measuredGeometry;
 ProtocolSession.prototype.sendCommand = async function(method, ...params) {
   if (method === 'Emulation.setDeviceMetricsOverride') {
     await originalSend.call(this, 'Emulation.setScrollbarsHidden', {hidden: false});
     commands.push({method, metrics: params[0], scrollbarsHidden: false});
   }
   return originalSend.call(this, method, ...params);
+};
+Driver.prototype.disconnect = async function() {
+  // Gathering has finished. Read the actual emulated page before detaching
+  // its CDP session, which resets emulation to the desktop window geometry.
+  try {
+    const session = this.defaultSession;
+    const value = await session.sendCommand('Runtime.evaluate', {
+      expression: '({innerWidth,innerHeight,devicePixelRatio,url:location.href})',
+      returnByValue: true,
+    });
+    measuredGeometry = {window: value.result.value,
+      layout: await session.sendCommand('Page.getLayoutMetrics')};
+  } catch (error) {
+    measuredGeometry = {error: error.message};
+  } finally {
+    await originalDisconnect.call(this);
+  }
 };
 const html = '<!doctype html><html><head><meta charset="utf-8">' +
   '<meta name="viewport" content="width=device-width,initial-scale=1">' +
@@ -206,6 +226,7 @@ try {
     for (const [index, arm] of [...'ABBAAB'].entries()) {
       activeRun = `${mode}-${index + 1}-${arm}`;
       commands = [];
+      measuredGeometry = undefined;
       const row = {run: activeRun, mode, arm, buildIdentity: buildIdentities[arm]};
       const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'lh-paired-parent-surface-'));
       let chrome; let browser; let timer;
@@ -251,7 +272,9 @@ try {
           .filter(a => a.scoreDisplayMode === 'error')
           .map(a => ({id: a.id, message: a.errorMessage}));
         row.deviceMetricCommands = commands;
-        // These reads occur after Lighthouse returned, so they cannot alter measured FCP.
+        row.measuredGeometry = measuredGeometry;
+        // Retain the post-cleanup state separately: CDP detach can reset these
+        // values to desktop geometry. Validate the pre-detach read above.
         const session = await page.createCDPSession();
         row.afterMetrics = {layout: await session.send('Page.getLayoutMetrics'),
           window: await page.evaluate(() => ({innerWidth: globalThis.innerWidth,
@@ -259,9 +282,11 @@ try {
             outerHeight: globalThis.outerHeight, devicePixelRatio: globalThis.devicePixelRatio,
             screenWidth: globalThis.screen.width, screenHeight: globalThis.screen.height,
             url: globalThis.location.href}))};
-        assert.equal(row.afterMetrics.window.innerWidth, 412);
-        assert.equal(row.afterMetrics.window.innerHeight, 823);
-        assert.equal(row.afterMetrics.window.devicePixelRatio, 1.75);
+        assert(!row.measuredGeometry?.error, 'Failed to read geometry before CDP detach');
+        assert.equal(row.measuredGeometry?.window?.innerWidth, 412);
+        assert.equal(row.measuredGeometry?.window?.innerHeight, 823);
+        assert.equal(row.measuredGeometry?.window?.devicePixelRatio, 1.75);
+        assert.equal(row.measuredGeometry?.window?.url, url);
         assert.equal(row.afterMetrics.window.url, url);
         assert(commands.length && commands.every(c => c.scrollbarsHidden === false));
         assert(result.artifacts?.Trace && result.artifacts?.DevtoolsLog);
@@ -309,6 +334,7 @@ try {
   }
 } finally {
   ProtocolSession.prototype.sendCommand = originalSend;
+  Driver.prototype.disconnect = originalDisconnect;
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));
 }
