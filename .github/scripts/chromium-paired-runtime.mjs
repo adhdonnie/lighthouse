@@ -68,7 +68,8 @@ const settings = {onlyCategories: ['performance'], formFactor: 'mobile',
   additionalTraceCategories: 'cc,viz,renderer.scheduler,disabled-by-default-cc.debug,' +
     'disabled-by-default-devtools.timeline.frame,disabled-by-default-cc.debug.scheduler,' +
     'disabled-by-default-viz.surface_id_flow'};
-const sourceFiles = ['core/index.js', 'core/gather/navigation-runner.js',
+const sourceFiles = ['.github/scripts/chromium-paired-runtime.mjs',
+  'core/index.js', 'core/gather/navigation-runner.js',
   'core/lib/tracehouse/trace-processor.js', 'core/lib/network-recorder.js',
   'core/gather/gatherers/console-messages.js', 'yarn.lock'];
 const buildIdentities = {};
@@ -288,9 +289,11 @@ try {
         }
         if (browser) await browser.disconnect().catch(() => {});
         if (chrome) {
-          await chrome.kill().catch(error => {
+          try {
+            await chrome.kill();
+          } catch (error) {
             row.cleanupError = error.message;
-          });
+          }
         }
         await fs.rm(profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 200})
           .catch(error => {
@@ -317,7 +320,8 @@ const summary = {
       'inspect paired traces before a fix claim.' :
     'INCONCLUSIVE: baseline overlap plus page-sink undrawn throttling was not observed; ' +
       'no performance fix proven.',
-  complete: results.length === 12 && results.every(r => !r.error),
+  complete: results.length === 12 &&
+    results.every(r => !r.error && !r.cleanupError && !r.profileCleanupError),
   runs: results.map(r => ({run: r.run, mode: r.mode, arm: r.arm,
     fcpMs: r.metrics?.observedFirstContentfulPaint, overlap: r.overlap, error: r.error})),
   limitation: 'Completion checks data quality only. No performance threshold, retries, ' +
