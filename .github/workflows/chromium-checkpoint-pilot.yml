@@ -129,6 +129,8 @@ jobs:
           evidence=pathlib.Path(os.environ['EVIDENCE_DIR'])
           log=(evidence/'resumed-object-build.log').read_text()
           assert re.search(r'Build Succeeded:\s+0 steps',log), 'Siso did not prove zero executed actions'
+          assert 'Regenerating ninja files' not in log, 'GN regeneration is an executed action despite final zero-step summary'
+          assert not re.search(r'\[\d+/\d+\]\s+\S+\s+[SF]\s+',log), 'Siso action execution found in raw log'
           p=pathlib.Path(os.environ['CHROMIUM_SRC'])/'out/Paired'/os.environ['PILOT_OBJECT']
           actual={'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size,'mtime_ns':p.stat().st_mtime_ns}
           expected=json.loads(pathlib.Path(os.environ['RUNNER_TEMP'],'chromium-checkpoint/initial-object.json').read_text())

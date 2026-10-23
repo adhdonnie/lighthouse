@@ -30,6 +30,11 @@ def digest(p):
 def scan(root, output=False):
     result = {}
     for parent, dirs, files in os.walk(root, followlinks=False):
+        directory = Path(parent)
+        st = directory.stat()
+        result[directory.relative_to(root).as_posix()] = {
+            'directory': True, 'mtime_ns': st.st_mtime_ns,
+            'mode': st.st_mode & 0o777}
         dirs[:] = sorted(d for d in dirs if output or d not in {'.git', '.cipd', 'out'})
         # Directory symlinks are data, not directories to traverse.
         for n in list(dirs):
@@ -46,7 +51,7 @@ def scan(root, output=False):
                 continue
             st = p.lstat()
             if p.is_symlink():
-                result[rel] = {'link': os.readlink(p)}
+                result[rel] = {'link': os.readlink(p), 'mtime_ns': st.st_mtime_ns}
             elif p.is_file():
                 result[rel] = {'sha256': digest(p), 'size': st.st_size,
                                'mtime_ns': st.st_mtime_ns, 'mode': st.st_mode & 0o777}
@@ -75,9 +80,16 @@ def same_content(expected, actual, report=None):
 
 
 def stamps(root, rows):
-    for name, row in rows.items():
+    # GN records directory inputs for glob/listing operations. Their mtimes
+    # must follow the file restores, rather than being lost after extraction.
+    ordered = sorted(rows.items(), key=lambda item: (
+        bool(item[1].get('directory')), -len(Path(item[0]).parts)))
+    for name, row in ordered:
         if 'mtime_ns' in row:
-            os.utime(root / name, ns=(row['mtime_ns'], row['mtime_ns']))
+            os.utime(root / name, ns=(row['mtime_ns'], row['mtime_ns']),
+                     follow_symlinks='link' not in row)
+            assert (root / name).lstat().st_mtime_ns == row['mtime_ns'], \
+                f'Exact timestamp restore failed: {name}'
 
 
 def main():
@@ -108,7 +120,7 @@ def main():
     if args.mode == 'seal':
         cp.mkdir(parents=True, exist_ok=True)
         ready.unlink(missing_ok=True)
-        rows = {'identity': identity, 'absoluteSource': str(src), 'out': str(out),
+        rows = {'schema': 2, 'identity': identity, 'absoluteSource': str(src), 'out': str(out),
                 'source': scan(src), 'outputs': scan(src / out, True)}
         # Refuse to upload a partial/truncated checkpoint. Cap compressed bytes
         # before writing, leaving room within the default included cache quota.
@@ -152,6 +164,7 @@ def main():
         assert digest(manifest) == header['manifestSha256'], 'Manifest hash mismatch'
         with gzip.open(manifest, 'rt') as f:
             rows = json.load(f)
+        assert rows.get('schema') == 2, 'Directory timestamp manifest required'
         assert rows['identity'] == identity, 'Identity mismatch'
         assert rows['absoluteSource'] == str(src), 'Absolute checkout path changed'
         assert rows['out'] == str(out), 'Output path changed'
