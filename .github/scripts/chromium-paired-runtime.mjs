@@ -18,6 +18,11 @@ const output = path.resolve(outputArg);
 const diagnosticMode = process.env.CHROMIUM_DIAGNOSTIC_MODE || 'instrumented';
 assert(['instrumented', 'without-added-diagnostics'].includes(diagnosticMode),
   'Unknown diagnostic mode');
+const chromiumRevision = process.env.CHROMIUM_REVISION ||
+  '0e66b94549a8bd85f03fbdf189b752d6e7b63c32';
+const chromiumVersion = process.env.CHROMIUM_VERSION || '155.0.8059.85';
+assert.match(chromiumRevision, /^[a-f0-9]{40}$/, 'Require an exact Chromium revision');
+assert.match(chromiumVersion, /^\d+\.\d+\.\d+\.\d+$/, 'Require an exact Chromium version');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const load = relative => import(pathToFileURL(path.join(root, relative)).href);
 const requireFromRoot = createRequire(path.join(root, 'package.json'));
@@ -110,8 +115,8 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const url = `http://127.0.0.1:${server.address().port}/about`;
 await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({
   workflowGitSha: process.env.GITHUB_SHA || null,
-  chromiumRevision: '0e66b94549a8bd85f03fbdf189b752d6e7b63c32',
-  chromiumVersion: '155.0.8059.85', v8RandomSeed: 17148, order: 'ABBAAB',
+  chromiumRevision,
+  chromiumVersion, v8RandomSeed: 17148, order: 'ABBAAB',
   diagnosticMode,
   arms: {A: diagnosticMode === 'instrumented' ? 'diagnostics-only' : 'baseline',
     B: 'same diagnostic mode plus narrow parent-surface fix'}, buildIdentities, settings,
@@ -256,7 +261,7 @@ try {
           arg.includes('LimitCrossOriginNonActivatedPaintHolding')),
           'Security policy must remain at its enabled default');
         row.version = await (await fetch(`http://127.0.0.1:${chrome.port}/json/version`)).json();
-        assert.equal(row.version.Browser, 'Chrome/155.0.8059.85');
+        assert.equal(row.version.Browser, `Chrome/${chromiumVersion}`);
         browser = await puppeteer.connect({browserURL: `http://127.0.0.1:${chrome.port}`,
           defaultViewport: null});
         const page = await browser.newPage();
