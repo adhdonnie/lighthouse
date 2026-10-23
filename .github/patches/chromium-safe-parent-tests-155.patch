@@ -1,3 +1,5 @@
+diff --git a/cc/trees/layer_tree_host_unittest.cc b/cc/trees/layer_tree_host_unittest.cc
+index b0fd7385c2..7bd4f51fd2 100644
 --- a/cc/trees/layer_tree_host_unittest.cc
 +++ b/cc/trees/layer_tree_host_unittest.cc
 @@ -10,6 +10,7 @@
@@ -8,7 +10,7 @@
  #include <memory>
  
  #include "base/auto_reset.h"
-@@ -8377,6 +8378,291 @@
+@@ -8377,6 +8378,334 @@ class LayerTreeHostTestPresentationTime : public LayerTreeHostTest {
  };
  SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostTestPresentationTime);
  
@@ -19,7 +21,13 @@
 +    : public LayerTreeHostTest,
 +      public viz::ExternalBeginFrameSourceClient {
 + protected:
-+  enum class Update { kParentSequence, kChildSequence, kUnchanged };
++  enum class Update {
++    kParentSequence,
++    kChildSequence,
++    kUnchanged,
++    kNewEmbedding,
++    kResize,
++  };
 +
 +  explicit LayerTreeHostTestSameSizeSurfaceBase(Update update)
 +      : LayerTreeHostTest(kDefaultRendererType,
@@ -60,7 +68,7 @@
 +    const bool pending = phase_ == Phase::kPending;
 +    if (pending) {
 +      ++pending_generated_frames_;
-+      EXPECT_NE(Update::kParentSequence, update_)
++      EXPECT_FALSE(BlocksStaleFrames())
 +          << "obsolete surface submitted during parent handoff";
 +    }
 +    generated_surface_ids_.emplace(
@@ -79,7 +87,7 @@
 +    if (generated_frame.pending) {
 +      ++pending_submissions_;
 +      EXPECT_EQ(initial_surface_id_, submitted_id);
-+      EXPECT_NE(Update::kParentSequence, update_)
++      EXPECT_FALSE(BlocksStaleFrames())
 +          << "obsolete surface submitted during parent handoff";
 +    }
 +
@@ -134,12 +142,15 @@
 +  void AfterTest() override {
 +    EXPECT_EQ(kRedrawAttempts, redraw_attempts_);
 +    EXPECT_EQ(pending_generated_frames_, pending_submissions_);
-+    if (update_ == Update::kParentSequence) {
++    if (BlocksStaleFrames()) {
 +      EXPECT_EQ(0, pending_generated_frames_);
 +      EXPECT_EQ(0, pending_submissions_);
 +      EXPECT_EQ(1, resumed_submissions_);
 +    } else {
 +      EXPECT_GT(pending_submissions_, 0);
++      if (update_ == Update::kNewEmbedding) {
++        EXPECT_EQ(1, resumed_submissions_);
++      }
 +    }
 +    EXPECT_FALSE(deferred_update_);
 +  }
@@ -159,16 +170,26 @@
 +  void ConfigureUpdate() {
 +    deferred_update_ = layer_tree_host()->DeferMainFrameUpdate();
 +    requested_surface_id_ = initial_surface_id_;
-+    if (update_ == Update::kParentSequence) {
++    if (BlocksStaleFrames()) {
 +      GenerateNewLocalSurfaceId();
 +      requested_surface_id_ = GetCurrentLocalSurfaceId();
 +    } else if (update_ == Update::kChildSequence) {
 +      ASSERT_TRUE(child_allocator_.UpdateFromParent(initial_surface_id_));
 +      child_allocator_.GenerateId();
 +      requested_surface_id_ = child_allocator_.GetCurrentLocalSurfaceId();
++    } else if (update_ == Update::kNewEmbedding) {
++      requested_surface_id_ =
++          viz::LocalSurfaceId(initial_surface_id_.parent_sequence_number() + 1,
++                              initial_surface_id_.child_sequence_number(),
++                              base::UnguessableToken::Create());
++      ASSERT_NE(initial_surface_id_.embed_token(),
++                requested_surface_id_.embed_token());
 +    }
-+    layer_tree_host()->SetViewportRectAndScale(
-+        layer_tree_host()->device_viewport_rect(), 1.f, requested_surface_id_);
++    const gfx::Rect viewport = update_ == Update::kResize
++                                   ? gfx::Rect(25, 25)
++                                   : layer_tree_host()->device_viewport_rect();
++    layer_tree_host()->SetViewportRectAndScale(viewport, 1.f,
++                                               requested_surface_id_);
 +  }
 +
 +  void BeginAttempts() {
@@ -182,7 +203,7 @@
 +  void ReleaseUpdate() { deferred_update_.reset(); }
 +
 +  void ResumeDrawing() {
-+    if (update_ != Update::kParentSequence) {
++    if (!BlocksStaleFrames() && update_ != Update::kNewEmbedding) {
 +      // These updates do not request a new main-frame commit. A child-only
 +      // target would therefore strand the old active tree instead of drawing.
 +      phase_ = Phase::kDraining;
@@ -208,6 +229,10 @@
 +    phase_ = Phase::kDone;
 +    host_impl_ = nullptr;
 +    EndTest();
++  }
++
++  bool BlocksStaleFrames() const {
++    return update_ == Update::kParentSequence || update_ == Update::kResize;
 +  }
 +
 +  bool CanIssueFrame() const {
@@ -296,6 +321,26 @@
 +      : LayerTreeHostTestSameSizeSurfaceBase(Update::kUnchanged) {}
 +};
 +MULTI_THREAD_TEST_F(LayerTreeHostTestUnchangedSurfaceKeepsDrawing);
++
++// A different embed token denotes a different surface lifetime. A same-size
++// handoff must not inherit the parent-sequence gate from the previous lifetime.
++class LayerTreeHostTestNewEmbeddingKeepsDrawing
++    : public LayerTreeHostTestSameSizeSurfaceBase {
++ public:
++  LayerTreeHostTestNewEmbeddingKeepsDrawing()
++      : LayerTreeHostTestSameSizeSurfaceBase(Update::kNewEmbedding) {}
++};
++MULTI_THREAD_TEST_F(LayerTreeHostTestNewEmbeddingKeepsDrawing);
++
++// Resizing already blocked obsolete frames before the same-size fix. Verify
++// both suppression and recovery to protect that existing behavior.
++class LayerTreeHostTestResizeSurfaceBlocksStaleFrames
++    : public LayerTreeHostTestSameSizeSurfaceBase {
++ public:
++  LayerTreeHostTestResizeSurfaceBlocksStaleFrames()
++      : LayerTreeHostTestSameSizeSurfaceBase(Update::kResize) {}
++};
++MULTI_THREAD_TEST_F(LayerTreeHostTestResizeSurfaceBlocksStaleFrames);
 +
  // Makes sure that viz::LocalSurfaceId is propagated to the LayerTreeFrameSink.
  class LayerTreeHostTestLocalSurfaceId : public LayerTreeHostTest {

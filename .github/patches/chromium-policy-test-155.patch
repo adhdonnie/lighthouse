@@ -1,3 +1,5 @@
+diff --git a/content/browser/renderer_host/render_frame_host_impl_browsertest.cc b/content/browser/renderer_host/render_frame_host_impl_browsertest.cc
+index 0c8428f982..8a806add3c 100644
 --- a/content/browser/renderer_host/render_frame_host_impl_browsertest.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl_browsertest.cc
 @@ -36,6 +36,7 @@
@@ -8,7 +10,7 @@
  #include "content/browser/back_forward_cache/back_forward_cache_impl.h"
  #include "content/browser/browser_main_loop.h"
  #include "content/browser/renderer_host/initiator_navigation_state_impl.h"
-@@ -10039,6 +10040,112 @@
+@@ -10039,6 +10040,123 @@ viz::SurfaceId GetFirstSurfaceIdAfterNavigation(RenderWidgetHostView* view) {
  
  }  // namespace
  
@@ -59,6 +61,13 @@
 +  ASSERT_FALSE(rfh->ShouldChangeRenderFrameHostOnSameSiteNavigation());
 +  DisableProactiveBrowsingInstanceSwapFor(rfh);
 +
++  // A copyable frame does not stop the initial navigation's paint-holding
++  // timer. Settle only that setup navigation before arming the effectively
++  // infinite timeout for the navigation under test below.
++  RenderWidgetHostImpl* rwhi = rfh->GetRenderWidgetHost();
++  ASSERT_TRUE(base::test::RunUntil(
++      [&]() { return !rwhi->IsContentRenderingTimeoutRunning(); }));
++
 +  RenderFrameSubmissionObserver old_submission(rfh);
 +  ASSERT_TRUE(ExecJs(rfh, "document.body.style.background = 'red';",
 +                     EXECUTE_SCRIPT_NO_USER_GESTURE));
@@ -68,12 +77,16 @@
 +  const viz::SurfaceId old_surface =
 +      GetCurrentSurfaceIdOnDelegatedFrameHost(rfh->GetView());
 +  ASSERT_TRUE(old_surface.is_valid());
-+  RenderWidgetHostImpl* rwhi = rfh->GetRenderWidgetHost();
 +  ASSERT_FALSE(rwhi->IsContentRenderingTimeoutRunning());
 +  // A missing immediate clear must not pass because a wall-clock timer expired.
 +  rwhi->SetNewContentRenderingTimeoutForTesting(base::TimeDelta::Max());
 +
 +  TestNavigationObserver navigation(web_contents());
++  // Select commit completion before starting: the stylesheet request can be
++  // observed after DidFinishNavigation, while load remains intentionally
++  // blocked.
++  navigation.set_wait_event(
++      TestNavigationObserver::WaitEvent::kNavigationFinished);
 +  ASSERT_TRUE(ExecJs(rfh, JsReplace("location.href = $1;", new_url),
 +                     EXECUTE_SCRIPT_NO_USER_GESTURE));
 +  document_response_->WaitForRequest();
@@ -83,7 +96,7 @@
 +      "<body>new document</body>");
 +  document_response_->Done();
 +  stylesheet_response_->WaitForRequest();
-+  navigation.WaitForNavigationFinished();
++  navigation.Wait();
 +  ASSERT_EQ(rfh, web_contents()->GetPrimaryMainFrame());
 +  ASSERT_EQ(new_url, web_contents()->GetLastCommittedURL());
 +
