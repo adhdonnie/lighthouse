@@ -1,8 +1,5 @@
 name: Chromium parent-surface production validation
 on:
-  push:
-    branches: [codex/chromium-parent-surface-fix]
-    paths: [.github/workflows/chromium-parent-surface-validation.yml]
   workflow_dispatch:
     inputs:
       suite:
@@ -38,7 +35,7 @@ jobs:
           assert suite in ['all','cc','viz','policy','runtime']
           assert revision in ['both','155','main']
           pins={'155':'0e66b94549a8bd85f03fbdf189b752d6e7b63c32',
-                'main':'9bced7d4b04bec1fc6fa2687583c3bc88dd6de01'}
+                'main':'f540c88ff79eebb05a89521a3a2dd682ae04b44f'}
           suites=['cc','viz','policy']if suite=='all'else([]if suite=='runtime'else[suite])
           bases=list(pins)if revision=='both'else[revision]
           rows=[{'suite':s,'base':b,'revision':pins[b]}for s in suites for b in bases]

@@ -92,16 +92,20 @@ case "$suite" in
     parent='*LayerTreeHostTestSameSizeParentSurfaceBlocksStaleFrames*'
     child='LayerTreeHostTestSameSizeChildSurfaceAckKeepsDrawing'
     unchanged='LayerTreeHostTestUnchangedSurfaceKeepsDrawing'
+    embedding='LayerTreeHostTestNewEmbeddingKeepsDrawing'
+    resize='LayerTreeHostTestResizeSurfaceBlocksStaleFrames'
+    controls="*$child*:*$unchanged*:*$embedding*:*$resize*"
     initial_build 3000 cc_unittests
     run_test cc_unittests "$parent" baseline-parent fail
-    run_test cc_unittests "*$child*:*$unchanged*" baseline-boundaries pass \
-      --require "$child" --require "$unchanged"
+    run_test cc_unittests "$controls" baseline-boundaries pass \
+      --require "$child" --require "$unchanged" --require "$embedding" --require "$resize"
     apply_patch "${CC_FIX_PATCH:?}"
     check_paths cc/trees/layer_tree_host.cc cc/trees/layer_tree_host_unittest.cc
     format_and_record fixed
     rebuild 1200 cc_unittests fixed
-    run_test cc_unittests "$parent:*$child*:*$unchanged*:*LocalSurface*:*SurfaceId*" fixed-cc pass \
-      --require SameSizeParentSurfaceBlocksStaleFrames --require "$child" --require "$unchanged"
+    run_test cc_unittests "$parent:$controls:*LocalSurface*:*SurfaceId*" fixed-cc pass \
+      --require SameSizeParentSurfaceBlocksStaleFrames --require "$child" --require "$unchanged" \
+      --require "$embedding" --require "$resize"
     ;;
   viz)
     initial_build 1800 viz_unittests

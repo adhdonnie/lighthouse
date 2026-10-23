@@ -1,19 +1,25 @@
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index faf8a73ab4..fb5e208a9f 100644
 --- a/cc/trees/layer_tree_host.cc
 +++ b/cc/trees/layer_tree_host.cc
-@@ -1517,11 +1517,18 @@
+@@ -1514,12 +1514,20 @@ void LayerTreeHost::SetViewportRectAndScale(
      }
    }
  
 -  // If a new viz::LocalSurfaceId has been provided, and the viewport has
 -  // changed, we need not begin new frames until it has activated.
++  const auto& previous_local_surface_id =
++      pending_commit_state()->local_surface_id_from_parent;
 +  // Wait for a new surface to activate after a resize or a parent-initiated
 +  // handoff within the same embedding. Impl-only frames for the old surface
 +  // may no longer be eligible for display during a same-size navigation.
 +  // Child-only sequence updates acknowledge existing renderer state and do
 +  // not request the commit needed to satisfy a new target.
    if (local_surface_id_from_parent.is_valid() &&
-       previous_local_surface_id != local_surface_id_from_parent &&
+-      pending_commit_state()->local_surface_id_from_parent !=
+-          local_surface_id_from_parent &&
 -      device_viewport_rect_changed) {
++      previous_local_surface_id != local_surface_id_from_parent &&
 +      (device_viewport_rect_changed ||
 +       (AreEmbedTokensEqual(previous_local_surface_id,
 +                            local_surface_id_from_parent) &&
