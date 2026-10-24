@@ -1,0 +1,371 @@
+--- a/components/viz/common/features.cc
++++ b/components/viz/common/features.cc
+@@ -409,6 +409,8 @@
+ BASE_FEATURE(kNoCompositorFrameAcks, base::FEATURE_DISABLED_BY_DEFAULT);
+ const base::FeatureParam<int> kNumberPendingFramesUntilThrottle{
+     &kNoCompositorFrameAcks, "pending_frames", 1};
++BASE_FEATURE(kNoUndrawnFrameThrottleWhileEmbedderWaits,
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kDisplaySchedulerAsClient, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Enables optimizations in `DirectRenderer` and `OcclusionCuller` that reuses
+--- a/components/viz/common/features.h
++++ b/components/viz/common/features.h
+@@ -178,6 +178,12 @@
+ VIZ_COMMON_EXPORT BASE_DECLARE_FEATURE(kNoCompositorFrameAcks);
+ VIZ_COMMON_EXPORT extern const base::FeatureParam<int>
+     kNumberPendingFramesUntilThrottle;
++// Kill switch. When enabled, a client isn't throttled for undrawn frames while
++// an embedder's active frame references a surface of that client that its
++// latest active surface doesn't cover.
++// TODO(crbug.com/40893974): Remove once this has shipped to stable.
++VIZ_COMMON_EXPORT BASE_DECLARE_FEATURE(
++    kNoUndrawnFrameThrottleWhileEmbedderWaits);
+ VIZ_COMMON_EXPORT BASE_DECLARE_FEATURE(kDisplaySchedulerAsClient);
+ 
+ VIZ_COMMON_EXPORT BASE_DECLARE_FEATURE(kRpdqFilterLookupOptimizations);
+--- a/components/viz/service/display/display_unittest.cc
++++ b/components/viz/service/display/display_unittest.cc
+@@ -1156,6 +1156,149 @@
+   UpdateBeginFrameTime(sub_support.get(), frame_time);
+ }
+ 
++// Tests that a client is not throttled for undrawn frames while the active
++// frame of its embedder references a newer surface of that client. The
++// embedder's frame activated, e.g. at its deadline, without the client's newer
++// surface, so the embedder isn't blocked on it.
++TEST_F(DisplayTest, DontThrottleUndrawnFramesWhileEmbedderAwaitsSurface) {
++  base::test::ScopedFeatureList scoped_features;
++  scoped_features.InitWithFeatures(
++      {features::kNoUndrawnFrameThrottleWhileEmbedderWaits},
++      {features::kNoCompositorFrameAcks});
++  id_allocator_.GenerateId();
++  SetUpGpuDisplay(RendererSettings());
++  display_->Initialize(client_.get(), manager_.surface_manager());
++  display_->SetLocalSurfaceId(id_allocator_.GetCurrentLocalSurfaceId(), 1.f);
++  support_->SetNeedsBeginFrame(true);
++
++  // Both surfaces of the sub client are in the same allocation group.
++  const base::UnguessableToken sub_embed_token =
++      base::UnguessableToken::Create();
++  const LocalSurfaceId sub_local_surface_id(6, sub_embed_token);
++  const LocalSurfaceId sub_local_surface_id2(7, sub_embed_token);
++  const SurfaceId sub_surface_id2(kAnotherFrameSinkId, sub_local_surface_id2);
++
++  MockCompositorFrameSinkClient sub_client;
++  auto sub_support = std::make_unique<CompositorFrameSinkSupport>(
++      &sub_client, &manager_, kAnotherFrameSinkId, /*is_root=*/false);
++  sub_support->SetNeedsBeginFrame(true);
++
++  // Submit kUndrawnFrameLimit+1 undrawn frames, so that the sub client is
++  // throttled.
++  base::TimeTicks frame_time;
++  for (uint32_t i = 0; i < CompositorFrameSinkSupport::kUndrawnFrameLimit + 1;
++       ++i) {
++    frame_time = base::TimeTicks::Now();
++    EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++    UpdateBeginFrameTime(sub_support.get(), frame_time);
++    sub_support->SubmitCompositorFrame(sub_local_surface_id,
++                                       MakeDefaultCompositorFrame());
++    UpdateBeginFrameTime(sub_support.get(), frame_time);
++  }
++  frame_time = base::TimeTicks::Now();
++  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++  UpdateBeginFrameTime(sub_support.get(), frame_time);
++
++  // The display's frame references only |sub_surface_id2|, which doesn't exist
++  // yet, and has no activation dependencies, so it activates immediately.
++  CompositorFrame frame = CompositorFrameBuilder()
++                              .AddDefaultRenderPass()
++                              .SetReferencedSurfaces({SurfaceRange(
++                                  sub_surface_id2, sub_surface_id2)})
++                              .Build();
++  support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
++                                  std::move(frame));
++  EXPECT_FALSE(
++      manager_.surface_manager()->HasBlockedEmbedder(kAnotherFrameSinkId));
++
++  // The sub client keeps receiving BeginFrames while it submits undrawn frames
++  // to the older surface.
++  for (uint32_t i = 0; i < CompositorFrameSinkSupport::kUndrawnFrameLimit * 3;
++       ++i) {
++    frame_time = base::TimeTicks::Now();
++    EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++    UpdateBeginFrameTime(sub_support.get(), frame_time);
++    sub_support->SubmitCompositorFrame(sub_local_surface_id,
++                                       MakeDefaultCompositorFrame());
++    UpdateBeginFrameTime(sub_support.get(), frame_time);
++  }
++
++  // If the embedder stops referencing the sub client, throttling resumes.
++  support_->SubmitCompositorFrame(
++      id_allocator_.GetCurrentLocalSurfaceId(),
++      CompositorFrameBuilder().AddDefaultRenderPass().Build());
++  frame_time = base::TimeTicks::Now();
++  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++  UpdateBeginFrameTime(sub_support.get(), frame_time);
++
++  // Restore the reference so the embedder awaits |sub_surface_id2| again.
++  support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
++                                  CompositorFrameBuilder()
++                                      .AddDefaultRenderPass()
++                                      .SetReferencedSurfaces({SurfaceRange(
++                                          sub_surface_id2, sub_surface_id2)})
++                                      .Build());
++
++  // Once the sub client submits |sub_surface_id2|, the embedder no longer
++  // awaits a newer surface, and throttling resumes, since nothing was drawn.
++  frame_time = base::TimeTicks::Now();
++  EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++  UpdateBeginFrameTime(sub_support.get(), frame_time);
++  sub_support->SubmitCompositorFrame(sub_local_surface_id2,
++                                     MakeDefaultCompositorFrame());
++  frame_time = base::TimeTicks::Now();
++  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++  UpdateBeginFrameTime(sub_support.get(), frame_time);
++}
++
++// Tests that when `kNoUndrawnFrameThrottleWhileEmbedderWaits` is disabled, a
++// client is throttled for undrawn frames even though the active frame of its
++// embedder references a newer surface of that client.
++TEST_F(DisplayTest, ThrottleUndrawnFramesWhileEmbedderAwaitsWhenDisabled) {
++  base::test::ScopedFeatureList scoped_features;
++  scoped_features.InitWithFeatures(
++      {}, {features::kNoUndrawnFrameThrottleWhileEmbedderWaits,
++           features::kNoCompositorFrameAcks});
++  id_allocator_.GenerateId();
++  SetUpGpuDisplay(RendererSettings());
++  display_->Initialize(client_.get(), manager_.surface_manager());
++  display_->SetLocalSurfaceId(id_allocator_.GetCurrentLocalSurfaceId(), 1.f);
++  support_->SetNeedsBeginFrame(true);
++
++  const base::UnguessableToken sub_embed_token =
++      base::UnguessableToken::Create();
++  const LocalSurfaceId sub_local_surface_id(6, sub_embed_token);
++  const LocalSurfaceId sub_local_surface_id2(7, sub_embed_token);
++  const SurfaceId sub_surface_id2(kAnotherFrameSinkId, sub_local_surface_id2);
++
++  MockCompositorFrameSinkClient sub_client;
++  auto sub_support = std::make_unique<CompositorFrameSinkSupport>(
++      &sub_client, &manager_, kAnotherFrameSinkId, /*is_root=*/false);
++  sub_support->SetNeedsBeginFrame(true);
++
++  CompositorFrame frame = CompositorFrameBuilder()
++                              .AddDefaultRenderPass()
++                              .SetReferencedSurfaces({SurfaceRange(
++                                  sub_surface_id2, sub_surface_id2)})
++                              .Build();
++  support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
++                                  std::move(frame));
++
++  base::TimeTicks frame_time;
++  for (uint32_t i = 0; i < CompositorFrameSinkSupport::kUndrawnFrameLimit + 1;
++       ++i) {
++    frame_time = base::TimeTicks::Now();
++    EXPECT_TRUE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++    UpdateBeginFrameTime(sub_support.get(), frame_time);
++    sub_support->SubmitCompositorFrame(sub_local_surface_id,
++                                       MakeDefaultCompositorFrame());
++    UpdateBeginFrameTime(sub_support.get(), frame_time);
++  }
++  frame_time = base::TimeTicks::Now();
++  EXPECT_FALSE(ShouldSendBeginFrame(sub_support.get(), frame_time));
++  UpdateBeginFrameTime(sub_support.get(), frame_time);
++}
++
+ TEST_F(DisplayTest, DisplayTransformHint) {
+   SetUpSoftwareDisplay(RendererSettings());
+   display_->Initialize(client_.get(), manager_.surface_manager());
+--- a/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
++++ b/components/viz/service/frame_sinks/compositor_frame_sink_support.cc
+@@ -1604,6 +1604,18 @@
+   }
+ 
+   if (should_throttle_undrawn_frames) {
++    // An embedder whose frame activated without this client's newer surface,
++    // e.g. at its deadline, shows an older fallback or its background color
++    // until the surface arrives, and producing it takes BeginFrames. Unlike a
++    // blocked embedder, this doesn't override a requested throttle, and it has
++    // no deadline: it lasts until the client produces the surface or no
++    // embedder references it.
++    if (base::FeatureList::IsEnabled(
++            features::kNoUndrawnFrameThrottleWhileEmbedderWaits) &&
++        surface_manager_->HasActiveEmbedderAwaitingNewerSurface(
++            frame_sink_id_)) {
++      return RecordShouldSendBeginFrame("SendAwaitedByEmbedder", true);
++    }
+     return RecordShouldSendBeginFrame("ThrottleUndrawnFrames", false);
+   }
+ 
+--- a/components/viz/service/frame_sinks/surface_synchronization_unittest.cc
++++ b/components/viz/service/frame_sinks/surface_synchronization_unittest.cc
+@@ -4013,4 +4013,83 @@
+   EXPECT_FALSE(child_surface1()->HasUnackedActiveFrame());
+ }
+ 
++// Tests that a child active at an older parent sequence number does not satisfy
++// an active embedder referencing a newer one, until a covering surface arrives.
++TEST_F(SurfaceSynchronizationTest,
++       ActiveEmbedderAwaitsSurfaceWithNewerParentSequenceNumber) {
++  const SurfaceId parent_id = MakeSurfaceId(kParentFrameSink, 1, 1);
++  child_support1().SubmitCompositorFrame(
++      MakeSurfaceId(kChildFrameSink1, 6, 2).local_surface_id(),
++      MakeDefaultCompositorFrame(kBeginFrameSourceId));
++  parent_support().SubmitCompositorFrame(
++      parent_id.local_surface_id(),
++      MakeCompositorFrame(
++          empty_surface_ids(),
++          {SurfaceRange(std::nullopt, MakeSurfaceId(kChildFrameSink1, 7, 1))},
++          {}));
++  EXPECT_TRUE(surface_manager()->HasActiveEmbedderAwaitingNewerSurface(
++      kChildFrameSink1));
++
++  // (7, 2) covers (7, 1).
++  child_support1().SubmitCompositorFrame(
++      MakeSurfaceId(kChildFrameSink1, 7, 2).local_surface_id(),
++      MakeDefaultCompositorFrame(kBeginFrameSourceId));
++  EXPECT_FALSE(surface_manager()->HasActiveEmbedderAwaitingNewerSurface(
++      kChildFrameSink1));
++}
++
++// Tests that an active embedder referencing a surface in a new embed-token
++// allocation group with no active surfaces is awaited.
++TEST_F(SurfaceSynchronizationTest,
++       ActiveEmbedderAwaitsSurfaceInNewAllocationGroup) {
++  const SurfaceId parent_id = MakeSurfaceId(kParentFrameSink, 1, 1);
++  // Child is active in token group A.
++  child_support1().SubmitCompositorFrame(
++      MakeSurfaceId(kChildFrameSink1, 1, 1).local_surface_id(),
++      MakeDefaultCompositorFrame(kBeginFrameSourceId));
++
++  // Parent references a surface with a newly generated embed token B.
++  const SurfaceId child_new_token_id(
++      kChildFrameSink1, LocalSurfaceId(1, base::UnguessableToken::Create()));
++  parent_support().SubmitCompositorFrame(
++      parent_id.local_surface_id(),
++      MakeCompositorFrame(empty_surface_ids(),
++                          {SurfaceRange(std::nullopt, child_new_token_id)},
++                          {}));
++  EXPECT_TRUE(surface_manager()->HasActiveEmbedderAwaitingNewerSurface(
++      kChildFrameSink1));
++
++  // Submitting the awaited surface activates it and satisfies the embedder.
++  child_support1().SubmitCompositorFrame(
++      child_new_token_id.local_surface_id(),
++      MakeDefaultCompositorFrame(kBeginFrameSourceId));
++  EXPECT_FALSE(surface_manager()->HasActiveEmbedderAwaitingNewerSurface(
++      kChildFrameSink1));
++}
++
++// Tests that when an active embedder stops referencing a child surface,
++// the child is no longer considered awaited.
++TEST_F(SurfaceSynchronizationTest, ActiveEmbedderStopsReferencingChildSurface) {
++  const SurfaceId parent_id = MakeSurfaceId(kParentFrameSink, 1, 1);
++  child_support1().SubmitCompositorFrame(
++      MakeSurfaceId(kChildFrameSink1, 1, 1).local_surface_id(),
++      MakeDefaultCompositorFrame(kBeginFrameSourceId));
++  parent_support().SubmitCompositorFrame(
++      parent_id.local_surface_id(),
++      MakeCompositorFrame(
++          empty_surface_ids(),
++          {SurfaceRange(std::nullopt, MakeSurfaceId(kChildFrameSink1, 2, 1))},
++          {}));
++  EXPECT_TRUE(surface_manager()->HasActiveEmbedderAwaitingNewerSurface(
++      kChildFrameSink1));
++
++  // Parent submits a new frame to the same surface without referencing the
++  // child.
++  parent_support().SubmitCompositorFrame(
++      parent_id.local_surface_id(),
++      MakeCompositorFrame(empty_surface_ids(), empty_surface_ranges(), {}));
++  EXPECT_FALSE(surface_manager()->HasActiveEmbedderAwaitingNewerSurface(
++      kChildFrameSink1));
++}
++
+ }  // namespace viz
+--- a/components/viz/service/surfaces/surface_allocation_group.cc
++++ b/components/viz/service/surfaces/surface_allocation_group.cc
+@@ -8,6 +8,7 @@
+ #include <numeric>
+ #include <utility>
+ 
++#include "base/containers/adapters.h"
+ #include "base/memory/raw_ptr.h"
+ #include "components/viz/service/surfaces/surface.h"
+ #include "components/viz/service/surfaces/surface_manager.h"
+@@ -68,6 +69,20 @@
+ 
+ bool SurfaceAllocationGroup::HasBlockedEmbedder() const {
+   return !blocked_embedders_.empty();
++}
++
++bool SurfaceAllocationGroup::HasActiveEmbedderAwaitingNewerSurface() const {
++  if (active_embedders_.empty() || !last_active_reference_.is_valid()) {
++    return false;
++  }
++  // Normally there is at most one pending surface, so this loop shouldn't take
++  // more than two iterations.
++  for (const Surface* surface : base::Reversed(surfaces_)) {
++    if (surface->HasActiveFrame()) {
++      return !surface->surface_id().IsSameOrNewerThan(last_active_reference_);
++    }
++  }
++  return true;
+ }
+ 
+ void SurfaceAllocationGroup::RegisterActiveEmbedder(Surface* surface) {
+--- a/components/viz/service/surfaces/surface_allocation_group.h
++++ b/components/viz/service/surfaces/surface_allocation_group.h
+@@ -70,6 +70,13 @@
+   // Returns whether there is any embedder that is blocked on a surface in this
+   // allocation group.
+   bool HasBlockedEmbedder() const;
++
++  // Returns whether an embedder's active frame references this group and the
++  // latest active surface doesn't cover the last reference, i.e. isn't the
++  // same as or newer than it. Also true if no surface has activated yet. Until
++  // the submitter catches up, embedders draw an older fallback or their
++  // background color.
++  bool HasActiveEmbedderAwaitingNewerSurface() const;
+ 
+   // Called by |surface| when its newly activated frame references a surface in
+   // this allocation group. The embedder will be notified whenever a surface in
+--- a/components/viz/service/surfaces/surface_manager.cc
++++ b/components/viz/service/surfaces/surface_manager.cc
+@@ -739,6 +739,21 @@
+   return false;
+ }
+ 
++bool SurfaceManager::HasActiveEmbedderAwaitingNewerSurface(
++    const FrameSinkId& frame_sink_id) const {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  auto it = frame_sink_id_to_allocation_groups_.find(frame_sink_id);
++  if (it == frame_sink_id_to_allocation_groups_.end()) {
++    return false;
++  }
++  for (SurfaceAllocationGroup* group : it->second) {
++    if (group->HasActiveEmbedderAwaitingNewerSurface()) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ void SurfaceManager::AggregatedFrameSinksChanged() {
+   if (delegate_)
+     delegate_->AggregatedFrameSinksChanged();
+--- a/components/viz/service/surfaces/surface_manager.h
++++ b/components/viz/service/surfaces/surface_manager.h
+@@ -209,6 +209,12 @@
+   // |frame_sink_id|.
+   bool HasBlockedEmbedder(const FrameSinkId& frame_sink_id) const;
+ 
++  // Returns whether any allocation group of |frame_sink_id| has an active
++  // embedder awaiting a surface it doesn't have yet. See
++  // SurfaceAllocationGroup::HasActiveEmbedderAwaitingNewerSurface().
++  bool HasActiveEmbedderAwaitingNewerSurface(
++      const FrameSinkId& frame_sink_id) const;
++
+   // Indicates that the set of frame sinks being aggregated for display has
+   // changed since the previous aggregation.
+   void AggregatedFrameSinksChanged();
