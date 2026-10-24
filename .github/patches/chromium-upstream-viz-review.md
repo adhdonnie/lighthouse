@@ -22,7 +22,7 @@ The baseline and fixed arms include the same upstream helper APIs and tests. The
 | Intended baseline assertion and four controls | Passed | Passed |
 | Fixed affected Viz tests | 183 passed | 183 passed |
 | Stock CC LocalSurface/SurfaceId coverage | 13 passed | 14 passed |
-| Browser old-surface exclusion security positive | Passed in both arms | Not qualified; host startup fails before tested navigation |
+| Browser old-surface exclusion security positive | Passed in both arms | Fixed arm passed once after controlled host setup; baseline and removal-negative checks pending |
 | Matched mobile runtime collection | 12 captures | 0 captures |
 
 Linux captures use matched Release ABBAAB runs, actual viewport 412 × 823 and DPR 1.75, with no added source diagnostics. Standard tracing remains enabled. Runtime manifests differ only in the Viz service library and its TOC metadata; CC production and the security manager remain unchanged.
@@ -36,6 +36,6 @@ Native renderer scheduler review finds approximately 1016 ms baseline delivery g
 
 ## Limits and review disposition
 
-The Linux results establish a controlled fixture result. The fixture disables TreesInViz. They do not establish universal Lighthouse score recovery, Windows browser security/performance, Android-device behavior, or all compositor configurations. Windows component results do not substitute for browser security or runtime evidence. Windows host diagnostics are separate from accepted regression evidence, and diagnostic binaries are excluded from performance qualification.
+The Linux results establish a controlled fixture result. The fixture disables TreesInViz. They do not establish universal Lighthouse score recovery, Windows browser security/performance, Android-device behavior, or all compositor configurations. Windows component results do not substitute for complete browser security or runtime evidence. The unchanged fixed-arm browser security test subsequently passed under an ordinary account after controlled host setup; baseline, security-removal negative and matched runtime qualification remain pending. Windows host diagnostics are separate from accepted regression evidence, and diagnostic binaries are excluded from performance qualification.
 
 The alternate narrow CC candidate and its independent functional/full-token/scheduler evidence are retained separately. A redundant current-main speed-fix submission is on hold. This package supports review of the existing upstream mitigation and its exact release backports; remaining platform limits must accompany any review request.
